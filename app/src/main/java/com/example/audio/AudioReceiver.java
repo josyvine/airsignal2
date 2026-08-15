@@ -5,10 +5,13 @@ import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 
+import com.example.knowledge.PhoneticImageTransceiver;
 import com.example.models.TemplateToken;
 import com.example.utils.AirLogger;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AudioReceiver {
@@ -133,7 +136,7 @@ public class AudioReceiver {
                 int bitVal = AudioDecoder.detectBit(bitBuffer, 0, read, SAMPLE_RATE);
 
                 if (bitVal == -1) {
-                    // Silence or room noise — reset partial byte if waiting too long
+                    // Silence or room noise
                     continue;
                 }
 
@@ -149,7 +152,7 @@ public class AudioReceiver {
                         listener.onByteDecoded(completedByte);
                     }
 
-                    // Process Frame Preamble & Delimiter
+                    // Process Frame Preamble & Delimiter (0xAA ... 0x7E)
                     if (!isLockedOnPreamble) {
                         if (completedByte == START_FRAME_DELIMITER) {
                             isLockedOnPreamble = true;
@@ -158,7 +161,7 @@ public class AudioReceiver {
                     } else {
                         frameBuffer.write(completedByte);
 
-                        // Mode 4 Check: If 16 bytes accumulated, attempt TemplateToken validation
+                        // 1. Mode 4 Check: If 16 bytes accumulated, attempt TemplateToken validation
                         if (frameBuffer.size() == TemplateToken.TOKEN_BYTE_SIZE) {
                             byte[] candidateBytes = frameBuffer.toByteArray();
                             TemplateToken token = TemplateToken.fromByteArray(candidateBytes);
@@ -171,11 +174,21 @@ public class AudioReceiver {
                                 isLockedOnPreamble = false;
                                 frameBuffer.reset();
                             }
+                        } 
+                        
+                        // 2. Phonetic Image Preamble Check
+                        byte[] currentBufferBytes = frameBuffer.toByteArray();
+                        String preview = new String(currentBufferBytes, StandardCharsets.UTF_8);
+                        if (preview.contains(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE) && currentBufferBytes.length > 256) {
+                            if (listener != null) {
+                                listener.onFrameDecoded(currentBufferBytes);
+                            }
+                            isLockedOnPreamble = false;
+                            frameBuffer.reset();
                         } else if (frameBuffer.size() > 512) {
                             // Mode 2/3 Raw Packet Frame flush
-                            byte[] frameData = frameBuffer.toByteArray();
                             if (listener != null) {
-                                listener.onFrameDecoded(frameData);
+                                listener.onFrameDecoded(currentBufferBytes);
                             }
                             isLockedOnPreamble = false;
                             frameBuffer.reset();
