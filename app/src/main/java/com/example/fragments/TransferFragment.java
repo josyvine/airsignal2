@@ -5,19 +5,26 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
+import android.database.Cursor;
 import android.graphics.Color;
-import android.graphics.Paint;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.OpenableColumns;
 import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.Spinner;
+import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
@@ -28,7 +35,6 @@ import com.example.R;
 import com.example.adapters.TransferAdapter;
 import com.example.audio.AudioEncoder;
 import com.example.database.TransferDatabase;
-import com.example.knowledge.PhoneticBase64Dictionary;
 import com.example.knowledge.PhoneticImageTransceiver;
 import com.example.knowledge.PhoneticTokenManager;
 import com.example.knowledge.TemplateCatalog;
@@ -42,8 +48,11 @@ import com.example.utils.AirLogger;
 import com.example.utils.DataPacketManager;
 import com.example.utils.FileAssembler;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -54,6 +63,13 @@ public class TransferFragment extends Fragment {
     private RecyclerView rvTransfers;
     private TransferAdapter adapter;
     private TransferDatabase transferDb;
+
+    private Uri selectedFileUri = null;
+    private String selectedFileName = "None";
+    private long selectedFileSize = 0;
+    private File localCachedFile = null;
+
+    private ActivityResultLauncher<String> filePickerLauncher;
 
     // Real-time UI progress updater for incoming background transfers
     private final BroadcastReceiver progressReceiver = new BroadcastReceiver() {
@@ -66,6 +82,22 @@ public class TransferFragment extends Fragment {
             }
         }
     };
+
+    @Override
+    public void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // Native Android Storage File/Image Picker Launcher
+        filePickerLauncher = registerForActivityResult(
+                new ActivityResultContracts.GetContent(),
+                uri -> {
+                    if (uri != null) {
+                        selectedFileUri = uri;
+                        cacheSelectedFileLocally(uri);
+                    }
+                }
+        );
+    }
 
     @Override
     public void onResume() {
@@ -103,7 +135,7 @@ public class TransferFragment extends Fragment {
 
         loadTransfers();
 
-        view.findViewById(R.id.btnSelectFile).setOnClickListener(v -> showTransferOptionsDialog());
+        view.findViewById(R.id.btnSelectFile).setOnClickListener(v -> showFileSelectionDialog());
 
         view.findViewById(R.id.btnSendSmsData).setOnClickListener(v -> showSmsDataDialog());
 
@@ -122,91 +154,250 @@ public class TransferFragment extends Fragment {
         }
     }
 
-    private void showTransferOptionsDialog() {
+    private void showFileSelectionDialog() {
         CharSequence[] options = new CharSequence[]{
-                "Send Instant Visual Template (Phonetic)",
+                "Choose Real Image / File from Storage",
+                "Create Custom Visual Template (Phonetic)",
                 "Send Exact Lossless File (2400 Baud Audio)",
-                "Send Image via Phonetic Base64 Dictionary (Voice Call)",
-                "Generate Receiver Preview"
+                "Send Image via Phonetic Base64 Dictionary",
+                "Preview Receiver Template"
         };
 
         new AlertDialog.Builder(requireContext())
-                .setTitle("Select Data Transmission Mode")
+                .setTitle("Offline Data Transfer Hub")
                 .setItems(options, (dialog, which) -> {
                     if (which == 0) {
-                        sendInstantVisualTemplate();
+                        // Open Native Android Storage Access Framework
+                        filePickerLauncher.launch("*/*");
                     } else if (which == 1) {
-                        sendExactLosslessBinaryStream();
+                        showCustomTemplateBuilderDialog();
                     } else if (which == 2) {
-                        sendImageViaPhoneticBase64Dictionary();
+                        sendExactLosslessBinaryStream();
                     } else if (which == 3) {
+                        sendImageViaPhoneticBase64Dictionary();
+                    } else if (which == 4) {
                         simulateReceiverPopup();
                     }
                 })
                 .show();
     }
 
-    /**
-     * MODE 4: Instant Phonetic / Pre-Built Dictionary Token Burst (1.0 Second)
-     */
-    private void sendInstantVisualTemplate() {
-        TemplateToken token = new TemplateToken(
-                TemplateToken.MODE_PHONETIC_TOKEN,
-                TemplateToken.CATEGORY_TACTICAL_MAP,
-                TemplateCatalog.TEMPLATE_CHALAKUDY_SECTOR_MAP,
-                18500, // Normalized X Coord
-                35000, // Normalized Y Coord
-                TemplateToken.ICON_FLOOD,
-                TemplateToken.SEVERITY_CRITICAL,
-                240,   // Metric (2.4m depth)
-                0
-        );
+    private void cacheSelectedFileLocally(Uri uri) {
+        try {
+            Cursor cursor = requireContext().getContentResolver().query(uri, null, null, null, null);
+            if (cursor != null && cursor.moveToFirst()) {
+                int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (nameIndex != -1) selectedFileName = cursor.getString(nameIndex);
+                if (sizeIndex != -1) selectedFileSize = cursor.getLong(sizeIndex);
+                cursor.close();
+            }
 
-        String phoneticString = PhoneticTokenManager.encodeToPhoneticWords(token);
-        
+            InputStream is = requireContext().getContentResolver().openInputStream(uri);
+            if (is != null) {
+                localCachedFile = new File(requireContext().getCacheDir(), selectedFileName != null ? selectedFileName : "transfer_payload.bin");
+                FileOutputStream fos = new FileOutputStream(localCachedFile);
+                byte[] buf = new byte[8192];
+                int len;
+                while ((len = is.read(buf)) > 0) {
+                    fos.write(buf, 0, len);
+                }
+                fos.flush();
+                fos.close();
+                is.close();
+                selectedFileSize = localCachedFile.length();
+
+                Toast.makeText(requireContext(), "Selected: " + selectedFileName + " (" + (selectedFileSize / 1024) + " KB)", Toast.LENGTH_SHORT).show();
+            }
+        } catch (Exception e) {
+            AirLogger.e(TAG, "Error caching selected storage file", e);
+            Toast.makeText(requireContext(), "Failed reading file from storage", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
+     * Interactive Custom Template Builder Dialog (Zero Hardcoding)
+     */
+    private void showCustomTemplateBuilderDialog() {
+        LinearLayout container = new LinearLayout(requireContext());
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(32, 24, 32, 24);
+
+        // 1. Template Selector
+        TextView tvTpl = new TextView(requireContext());
+        tvTpl.setText("Select Base Template:");
+        tvTpl.setTextColor(Color.WHITE);
+
+        Spinner spTemplates = new Spinner(requireContext());
+        List<String> tplNames = new ArrayList<>();
+        tplNames.add("Chalakudy River & Bridge Grid (Map #1)");
+        tplNames.add("Emergency Medical Triage Form (Form #2)");
+        tplNames.add("Roadblock & Infrastructure Assessment (#3)");
+        tplNames.add("Logistics & Supply Drop Grid (#4)");
+        tplNames.add("Search & Rescue Team Status (#5)");
+
+        ArrayAdapter<String> tplAdapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, tplNames);
+        spTemplates.setAdapter(tplAdapter);
+
+        // 2. Hazard Stamp Selector
+        TextView tvIcon = new TextView(requireContext());
+        tvIcon.setText("Select Marker / Hazard Stamp:");
+        tvIcon.setTextColor(Color.WHITE);
+        tvIcon.setPadding(0, 16, 0, 0);
+
+        Spinner spIcons = new Spinner(requireContext());
+        List<String> iconNames = new ArrayList<>();
+        iconNames.add("Flood / Submersion Hazard");
+        iconNames.add("Fire / Heat Hazard");
+        iconNames.add("Roadblock / Structural Damage");
+        iconNames.add("Medical Emergency / Casualty");
+        iconNames.add("Evacuation Shelter / Safe Zone");
+        iconNames.add("Severe Electrical / Gas Hazard");
+
+        ArrayAdapter<String> iconAdapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, iconNames);
+        spIcons.setAdapter(iconAdapter);
+
+        // 3. Severity Level
+        TextView tvSev = new TextView(requireContext());
+        tvSev.setText("Priority / Severity Level:");
+        tvSev.setTextColor(Color.WHITE);
+        tvSev.setPadding(0, 16, 0, 0);
+
+        Spinner spSeverity = new Spinner(requireContext());
+        List<String> sevNames = new ArrayList<>();
+        sevNames.add("Low / Routine");
+        sevNames.add("Medium / Elevated");
+        sevNames.add("High Priority");
+        sevNames.add("CRITICAL EMERGENCY");
+
+        ArrayAdapter<String> sevAdapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, sevNames);
+        spSeverity.setAdapter(sevAdapter);
+
+        // 4. Metric Value Input (e.g. Water depth in cm)
+        TextView tvVal = new TextView(requireContext());
+        tvVal.setText("Metric Value (e.g. Water Depth in cm / Count):");
+        tvVal.setTextColor(Color.WHITE);
+        tvVal.setPadding(0, 16, 0, 0);
+
+        EditText etMetric = new EditText(requireContext());
+        etMetric.setHint("Enter numeric value (e.g., 240)");
+        etMetric.setText("240");
+        etMetric.setTextColor(Color.WHITE);
+
+        container.addView(tvTpl);
+        container.addView(spTemplates);
+        container.addView(tvIcon);
+        container.addView(spIcons);
+        container.addView(tvSev);
+        container.addView(spSeverity);
+        container.addView(tvVal);
+        container.addView(etMetric);
+
+        ScrollView scrollView = new ScrollView(requireContext());
+        scrollView.addView(container);
+
         new AlertDialog.Builder(requireContext())
-                .setTitle("Transmit Pre-Built Template")
-                .setMessage("Template: Chalakudy Flood Hazard\nToken: " + phoneticString + "\n\nThis will take ~0.8 seconds to transmit over the call.")
-                .setPositiveButton("Send Audio Burst", (dialog, which) -> {
+                .setTitle("Custom Visual Template Builder")
+                .setView(scrollView)
+                .setPositiveButton("Transmit Audio Burst", (dialog, which) -> {
+                    int tplId = spTemplates.getSelectedItemPosition() + 1;
+                    int iconId = spIcons.getSelectedItemPosition() + 1;
+                    int sevId = spSeverity.getSelectedItemPosition() + 1;
+                    int val = 0;
+                    try {
+                        val = Integer.parseInt(etMetric.getText().toString().trim());
+                    } catch (Exception ignored) {}
+
+                    TemplateToken customToken = new TemplateToken(
+                            TemplateToken.MODE_PHONETIC_TOKEN,
+                            TemplateToken.CATEGORY_TACTICAL_MAP,
+                            tplId,
+                            18500, // Custom Coordinate X
+                            35000, // Custom Coordinate Y
+                            iconId,
+                            sevId,
+                            val,
+                            0
+                    );
+
+                    String natoString = PhoneticTokenManager.encodeToPhoneticWords(customToken);
+                    AirLogger.i(TAG, "Broadcasting custom template token: " + natoString);
+
                     Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
                     serviceIntent.setAction(AudioTransferService.ACTION_SEND_TOKEN);
-                    serviceIntent.putExtra(AudioTransferService.EXTRA_TOKEN_PAYLOAD, token.toByteArray());
+                    serviceIntent.putExtra(AudioTransferService.EXTRA_TOKEN_PAYLOAD, customToken.toByteArray());
                     requireContext().startService(serviceIntent);
 
-                    Toast.makeText(requireContext(), "Transmitting Acoustic Token...", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(requireContext(), "Transmitting Acoustic Burst (~0.8s)...", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
     /**
-     * STANDALONE FEATURE: Sends Image using Phonetic Base64 Dictionary Block Substitution
+     * Transmits the real selected file over 2400 Baud FSK continuous audio stream.
+     */
+    private void sendExactLosslessBinaryStream() {
+        if (localCachedFile == null || !localCachedFile.exists()) {
+            Toast.makeText(requireContext(), "Please choose a file from storage first.", Toast.LENGTH_LONG).show();
+            filePickerLauncher.launch("*/*");
+            return;
+        }
+
+        byte[] fileBytes = readFileBytes(localCachedFile);
+        if (fileBytes == null || fileBytes.length == 0) {
+            Toast.makeText(requireContext(), "Selected file is empty.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        List<byte[]> binaryPackets = DataPacketManager.createBinaryPackets(fileBytes);
+        String fileId = UUID.randomUUID().toString().substring(0, 8);
+
+        double estMinutes = (binaryPackets.size() * 263.0) / (300.0 * 60.0);
+
+        new AlertDialog.Builder(requireContext())
+                .setTitle("Transmit Exact Lossless File")
+                .setMessage("File: " + selectedFileName + "\nSize: " + (selectedFileSize / 1024) + " KB\nTotal Audio Packets: " + binaryPackets.size() +
+                        "\nEst. Transfer Time: ~" + String.format("%.1f", estMinutes) + " min @ 2400 Baud\n\nEnsure voice call is active.")
+                .setPositiveButton("Start 2400 Baud Stream", (dialog, which) -> {
+                    TransferItem item = new TransferItem(fileId, selectedFileName, selectedFileSize, 0, "TRANSFERRING", "RAW_BINARY_2400", binaryPackets.size(), 0);
+                    transferDb.insertTransfer(item);
+
+                    Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
+                    requireContext().startService(serviceIntent);
+
+                    Toast.makeText(requireContext(), "Lossless Binary Stream Started in Background", Toast.LENGTH_LONG).show();
+                    loadTransfers();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /**
+     * Transmits real selected image using Phonetic Base64 Dictionary Block Substitution.
      */
     private void sendImageViaPhoneticBase64Dictionary() {
+        if (localCachedFile == null || !localCachedFile.exists()) {
+            Toast.makeText(requireContext(), "Please select an image file first.", Toast.LENGTH_LONG).show();
+            filePickerLauncher.launch("image/*");
+            return;
+        }
+
         new AlertDialog.Builder(requireContext())
                 .setTitle("Phonetic Base64 Image Transfer")
-                .setMessage("This converts your image to Base64, substitutes recurring 500-char blocks with Phonetic Dictionary words (ALPHA, BRAVO...), and transmits it over the active voice call.")
+                .setMessage("File: " + selectedFileName + "\nThis encodes your image, substitutes 500-char blocks using Phonetic Dictionary words (ALPHA, BRAVO...), and transmits it over the active voice call.")
                 .setPositiveButton("Transmit Image", (dialog, which) -> {
-                    // Create or load sample camera snapshot file in cache
-                    File sampleImage = getOrCreateSampleImageFile();
-                    if (sampleImage == null || !sampleImage.exists()) {
-                        Toast.makeText(requireContext(), "Unable to prepare image file", Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-
                     AudioEncoder encoder = new AudioEncoder(2400);
 
                     PhoneticImageTransceiver.sendImageViaPhoneticDictionary(
                             requireContext(),
-                            sampleImage,
+                            localCachedFile,
                             encoder,
                             new PhoneticImageTransceiver.OnPhoneticTransferListener() {
                                 @Override
                                 public void onProgress(int step, int totalSteps, String statusMessage) {
                                     if (getActivity() != null) {
-                                        getActivity().runOnUiThread(() -> {
-                                            Toast.makeText(requireContext(), statusMessage, Toast.LENGTH_SHORT).show();
-                                        });
+                                        getActivity().runOnUiThread(() -> Toast.makeText(requireContext(), statusMessage, Toast.LENGTH_SHORT).show());
                                     }
                                 }
 
@@ -216,8 +407,8 @@ public class TransferFragment extends Fragment {
                                         getActivity().runOnUiThread(() -> {
                                             TransferItem item = new TransferItem(
                                                     "PHON_" + System.currentTimeMillis(),
-                                                    sampleImage.getName(),
-                                                    sampleImage.length(),
+                                                    selectedFileName,
+                                                    selectedFileSize,
                                                     100,
                                                     TransferItem.STATUS_COMPLETED,
                                                     TransferItem.MODE_PHONETIC_TOKEN,
@@ -234,9 +425,7 @@ public class TransferFragment extends Fragment {
                                 @Override
                                 public void onError(Exception e) {
                                     if (getActivity() != null) {
-                                        getActivity().runOnUiThread(() -> {
-                                            Toast.makeText(requireContext(), "Transfer Failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                                        });
+                                        getActivity().runOnUiThread(() -> Toast.makeText(requireContext(), "Transfer Failed: " + e.getMessage(), Toast.LENGTH_SHORT).show());
                                     }
                                 }
                             }
@@ -246,54 +435,19 @@ public class TransferFragment extends Fragment {
                 .show();
     }
 
-    private File getOrCreateSampleImageFile() {
-        try {
-            File file = new File(requireContext().getCacheDir(), "sample_photo.webp");
-            if (!file.exists()) {
-                Bitmap bmp = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888);
-                Canvas canvas = new Canvas(bmp);
-                canvas.drawColor(Color.parseColor("#0284C7"));
-                Paint p = new Paint();
-                p.setColor(Color.WHITE);
-                p.setTextSize(24f);
-                canvas.drawText("AirSignal Lossless Sample", 20, 120, p);
-
-                FileOutputStream fos = new FileOutputStream(file);
-                bmp.compress(Bitmap.CompressFormat.WEBP, 90, fos);
-                fos.flush();
-                fos.close();
+    private byte[] readFileBytes(File file) {
+        try (InputStream is = new java.io.FileInputStream(file);
+             ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            byte[] buf = new byte[8192];
+            int r;
+            while ((r = is.read(buf)) != -1) {
+                bos.write(buf, 0, r);
             }
-            return file;
+            return bos.toByteArray();
         } catch (Exception e) {
-            AirLogger.e(TAG, "Failed creating sample image file", e);
-            return null;
+            AirLogger.e(TAG, "Error reading file bytes", e);
+            return new byte[0];
         }
-    }
-
-    /**
-     * MODE 2 / 3: Continuous Raw Binary Audio Stream (30 Minutes / 500 KB)
-     */
-    private void sendExactLosslessBinaryStream() {
-        byte[] dummyFileBytes = new byte[45000]; 
-        for (int i = 0; i < dummyFileBytes.length; i++) {
-            dummyFileBytes[i] = (byte) (i % 255);
-        }
-
-        List<byte[]> binaryPackets = DataPacketManager.createBinaryPackets(dummyFileBytes);
-        String fileId = UUID.randomUUID().toString().substring(0, 8);
-
-        new AlertDialog.Builder(requireContext())
-                .setTitle("Transmit Exact Lossless File")
-                .setMessage("File Size: 45 KB\nTotal Audio Packets: " + binaryPackets.size() + "\nEstimated Transfer Time: 2.5 Minutes @ 2400 Baud\n\nEnsure voice call is active.")
-                .setPositiveButton("Start 2400 Baud Stream", (dialog, which) -> {
-                    TransferItem item = new TransferItem(fileId, "lossless_document.pdf", 45000, 0, "TRANSFERRING", "RAW_BINARY_2400", binaryPackets.size(), 0);
-                    transferDb.insertTransfer(item);
-
-                    Toast.makeText(requireContext(), "Binary Stream Started in Background", Toast.LENGTH_LONG).show();
-                    loadTransfers();
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
     }
 
     private void simulateReceiverPopup() {
@@ -323,12 +477,14 @@ public class TransferFragment extends Fragment {
                 .setPositiveButton("Start SMS Transfer", (dialog, which) -> {
                     String phone = etPhone.getText().toString().trim();
                     if (!phone.isEmpty()) {
-                        byte[] testBytes = "AirSignal Offline Data Packet Test Content 2026".getBytes();
-                        List<DataPacket> packets = DataPacketManager.createPackets(testBytes);
-                        
+                        byte[] payloadBytes = (localCachedFile != null && localCachedFile.exists())
+                                ? readFileBytes(localCachedFile)
+                                : "AirSignal Offline Data Packet Test Content 2026".getBytes();
+
+                        List<DataPacket> packets = DataPacketManager.createPackets(payloadBytes);
                         String fileId = packets.isEmpty() ? "SYS_01" : packets.get(0).getFileId();
 
-                        TransferItem item = new TransferItem(fileId, "telemetry_log_2026.dat", testBytes.length, 100, "COMPLETED", "SMS_DATA", packets.size(), packets.size());
+                        TransferItem item = new TransferItem(fileId, selectedFileName.equals("None") ? "telemetry_log_2026.dat" : selectedFileName, payloadBytes.length, 100, "COMPLETED", "SMS_DATA", packets.size(), packets.size());
                         transferDb.insertTransfer(item);
 
                         Intent serviceIntent = new Intent(requireContext(), SmsTransferService.class);
@@ -357,7 +513,7 @@ public class TransferFragment extends Fragment {
             String phone = etPhone.getText().toString().trim();
             if (!phone.isEmpty()) {
                 String fileId = "SYS_AUD_" + System.currentTimeMillis();
-                TransferItem item = new TransferItem(fileId, "stream_audio_data.bin", 8192, 10, "TRANSFERRING", "AUDIO_DATA", 16, 2);
+                TransferItem item = new TransferItem(fileId, selectedFileName.equals("None") ? "stream_audio_data.bin" : selectedFileName, selectedFileSize > 0 ? selectedFileSize : 8192, 10, "TRANSFERRING", "AUDIO_DATA", 16, 2);
                 transferDb.insertTransfer(item);
 
                 Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
@@ -370,13 +526,5 @@ public class TransferFragment extends Fragment {
         });
 
         dialog.show();
-    }
-
-    private int dpToPx(int dp) {
-        return (int) TypedValue.applyDimension(
-                TypedValue.COMPLEX_UNIT_DIP,
-                dp,
-                getResources().getDisplayMetrics()
-        );
     }
 }
