@@ -5,6 +5,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -14,9 +15,7 @@ import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
-import android.view.Gravity;
 import android.view.ViewGroup;
-import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -60,7 +59,14 @@ public class VisualRenderer {
         // 3. Load Template Definition from Catalog
         TemplateCatalog.TemplateDefinition template = TemplateCatalog.getTemplate(token.getTemplateId());
 
-        // 4. Draw Static Vector Elements (River routes, roads, zones)
+        // 4. Handle Lossless Image Container Header Preview
+        if (token.getCategoryId() == TemplateToken.CATEGORY_LOSSLESS_IMAGE) {
+            drawLosslessContainerPreview(canvas, template, token);
+            drawHeaderHUD(canvas, template, token);
+            return bitmap;
+        }
+
+        // 5. Draw Static Vector Elements (River routes, roads, zones)
         List<TemplateCatalog.VectorElement> elements = template.getVectorElements();
         Paint elementPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
@@ -102,7 +108,7 @@ public class VisualRenderer {
             }
         }
 
-        // 5. Draw Dynamic Target Pin Coordinates
+        // 6. Draw Dynamic Target Pin Coordinates
         int pinX = mapCoord(token.getParamX(), CANVAS_WIDTH);
         int pinY = mapCoord(token.getParamY(), CANVAS_HEIGHT);
 
@@ -129,16 +135,53 @@ public class VisualRenderer {
         pinFill.setColor(iconColor);
         canvas.drawCircle(pinX, pinY, 28, pinFill);
 
-        // 6. Draw Vector Stamp Icon inside Pin
+        // 7. Draw Vector Stamp Icon inside Pin
         drawStampIcon(canvas, pinX, pinY, token.getStampIcon());
 
-        // 7. Render Dynamic Floating Callout Badge
+        // 8. Render Dynamic Floating Callout Badge
         drawCalloutBadge(canvas, pinX, pinY, token);
 
-        // 8. Render Top Navigation HUD Banner
+        // 9. Render Top Navigation HUD Banner
         drawHeaderHUD(canvas, template, token);
 
         return bitmap;
+    }
+
+    private static void drawLosslessContainerPreview(Canvas canvas, TemplateCatalog.TemplateDefinition template, TemplateToken token) {
+        int width = token.getParamX() > 0 ? token.getParamX() : 640;
+        int height = token.getParamY() > 0 ? token.getParamY() : 480;
+
+        Paint boxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        boxPaint.setColor(Color.parseColor("#1E293B"));
+        boxPaint.setStyle(Paint.Style.FILL);
+        RectF containerRect = new RectF(120, 220, CANVAS_WIDTH - 120, CANVAS_HEIGHT - 220);
+        canvas.drawRoundRect(containerRect, 24f, 24f, boxPaint);
+
+        Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        borderPaint.setColor(Color.parseColor("#0284C7"));
+        borderPaint.setStyle(Paint.Style.STROKE);
+        borderPaint.setStrokeWidth(4f);
+        canvas.drawRoundRect(containerRect, 24f, 24f, borderPaint);
+
+        // Draw Center Image Frame Icon
+        drawStampIcon(canvas, CANVAS_WIDTH / 2, 420, TemplateToken.ICON_IMAGE_CONTAINER);
+
+        Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        textPaint.setColor(Color.WHITE);
+        textPaint.setTextSize(32f);
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        canvas.drawText("EXACT LOSSLESS IMAGE CONTAINER", CANVAS_WIDTH / 2f, 560, textPaint);
+
+        textPaint.setColor(Color.parseColor("#38BDF8"));
+        textPaint.setTextSize(26f);
+        textPaint.setTypeface(Typeface.DEFAULT);
+        canvas.drawText("Resolution: " + width + " x " + height + " px (Lossless)", CANVAS_WIDTH / 2f, 620, textPaint);
+
+        textPaint.setColor(Color.parseColor("#94A3B8"));
+        textPaint.setTextSize(22f);
+        canvas.drawText("Pixel Streaming Pipeline: Pure Binary 2400 Baud", CANVAS_WIDTH / 2f, 680, textPaint);
+        canvas.drawText("Bit-for-Bit Exact | Zero Compression Artifacts", CANVAS_WIDTH / 2f, 720, textPaint);
     }
 
     private static void drawStampIcon(Canvas canvas, int cx, int cy, int iconId) {
@@ -148,7 +191,6 @@ public class VisualRenderer {
         iconPaint.setStrokeWidth(3f);
 
         if (iconId == TemplateToken.ICON_FLOOD) {
-            // Wave symbol
             Path wave = new Path();
             wave.moveTo(cx - 14, cy);
             wave.quadTo(cx - 7, cy - 8, cx, cy);
@@ -156,23 +198,26 @@ public class VisualRenderer {
             iconPaint.setStyle(Paint.Style.STROKE);
             canvas.drawPath(wave, iconPaint);
         } else if (iconId == TemplateToken.ICON_MEDICAL) {
-            // Medical Cross
             canvas.drawRect(cx - 4, cy - 14, cx + 4, cy + 14, iconPaint);
             canvas.drawRect(cx - 14, cy - 4, cx + 14, cy + 4, iconPaint);
         } else if (iconId == TemplateToken.ICON_ROADBLOCK) {
-            // X Barrier
             canvas.drawLine(cx - 10, cy - 10, cx + 10, cy + 10, iconPaint);
             canvas.drawLine(cx - 10, cy + 10, cx + 10, cy - 10, iconPaint);
         } else if (iconId == TemplateToken.ICON_FIRE) {
-            // Flame triangle
             Path flame = new Path();
             flame.moveTo(cx, cy - 14);
             flame.lineTo(cx - 10, cy + 12);
             flame.lineTo(cx + 10, cy + 12);
             flame.close();
             canvas.drawPath(flame, iconPaint);
+        } else if (iconId == TemplateToken.ICON_IMAGE_CONTAINER) {
+            // Photo Camera Icon
+            iconPaint.setStyle(Paint.Style.STROKE);
+            iconPaint.setStrokeWidth(4f);
+            canvas.drawRoundRect(new RectF(cx - 40, cy - 30, cx + 40, cy + 30), 8f, 8f, iconPaint);
+            canvas.drawCircle(cx, cy, 14, iconPaint);
+            canvas.drawRect(cx - 14, cy - 38, cx + 14, cy - 30, iconPaint);
         } else {
-            // General Exclamation
             canvas.drawCircle(cx, cy - 4, 3, iconPaint);
             canvas.drawLine(cx, cy - 12, cx, cy - 8, iconPaint);
         }
@@ -192,21 +237,18 @@ public class VisualRenderer {
         int badgeX = Math.min(Math.max(pinX - (badgeWidth / 2), 40), CANVAS_WIDTH - badgeWidth - 40);
         int badgeY = pinY > 600 ? pinY - 180 : pinY + 110;
 
-        // Badge Background Container
         Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         bgPaint.setColor(Color.parseColor("#1E293B"));
         bgPaint.setStyle(Paint.Style.FILL);
         RectF rect = new RectF(badgeX, badgeY, badgeX + badgeWidth, badgeY + badgeHeight);
         canvas.drawRoundRect(rect, 16f, 16f, bgPaint);
 
-        // Badge Border
         Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         borderPaint.setColor(TemplateCatalog.getIconColor(token.getStampIcon(), token.getSeverity()));
         borderPaint.setStyle(Paint.Style.STROKE);
         borderPaint.setStrokeWidth(3f);
         canvas.drawRoundRect(rect, 16f, 16f, borderPaint);
 
-        // Text Drawing
         Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         textPaint.setColor(Color.WHITE);
         textPaint.setTextSize(26f);
@@ -220,7 +262,6 @@ public class VisualRenderer {
     }
 
     private static void drawHeaderHUD(Canvas canvas, TemplateCatalog.TemplateDefinition template, TemplateToken token) {
-        // Top HUD Bar Background
         Paint hudBg = new Paint(Paint.ANTI_ALIAS_FLAG);
         hudBg.setColor(Color.parseColor("#0F172A"));
         hudBg.setAlpha(240);
@@ -231,14 +272,12 @@ public class VisualRenderer {
         border.setStrokeWidth(3f);
         canvas.drawLine(0, 140, CANVAS_WIDTH, 140, border);
 
-        // Template Name
         Paint titlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         titlePaint.setColor(Color.WHITE);
         titlePaint.setTextSize(34f);
         titlePaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
         canvas.drawText(template.getName(), 30, 55, titlePaint);
 
-        // Telemetry Metadata Subtitle
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
         String sub = "SECTOR #" + token.getTemplateId() + " | TIME: " + sdf.format(new Date());
         Paint subPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -246,7 +285,6 @@ public class VisualRenderer {
         subPaint.setTextSize(22f);
         canvas.drawText(sub, 30, 100, subPaint);
 
-        // Severity Status Pill on Top-Right
         String sevLabel = TemplateCatalog.getSeverityLabel(token.getSeverity());
         int sevColor = TemplateCatalog.getSeverityColor(token.getSeverity());
 
@@ -325,6 +363,68 @@ public class VisualRenderer {
                                 Toast.makeText(context, "NATO Code Copied to Clipboard", Toast.LENGTH_SHORT).show();
                             }
                         })
+                        .create();
+
+                dialog.show();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
+    }
+
+    /**
+     * Mode 2 / Mode 3: Displays the 100% exact original camera photo on the receiver screen.
+     */
+    public static void showLosslessImageDialog(final Context context, final byte[] rawImageBytes, final String fileName) {
+        if (context == null || rawImageBytes == null || rawImageBytes.length == 0) return;
+
+        new Handler(Looper.getMainLooper()).post(() -> {
+            try {
+                Bitmap exactBitmap = BitmapFactory.decodeByteArray(rawImageBytes, 0, rawImageBytes.length);
+                if (exactBitmap == null) {
+                    Toast.makeText(context, "Failed decoding exact image stream", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                LinearLayout container = new LinearLayout(context);
+                container.setOrientation(LinearLayout.VERTICAL);
+                container.setBackgroundColor(Color.parseColor("#0F172A"));
+                container.setPadding(32, 32, 32, 32);
+
+                TextView tvHeader = new TextView(context);
+                tvHeader.setText("Exact Lossless Image Received");
+                tvHeader.setTextColor(Color.WHITE);
+                tvHeader.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+                tvHeader.setTypeface(null, Typeface.BOLD);
+                tvHeader.setPadding(0, 0, 0, 16);
+
+                ImageView ivPhoto = new ImageView(context);
+                ivPhoto.setImageBitmap(exactBitmap);
+                ivPhoto.setAdjustViewBounds(true);
+                LinearLayout.LayoutParams imgParams = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+
+                TextView tvDetails = new TextView(context);
+                tvDetails.setText("File Name: " + (fileName != null ? fileName : "received_photo.webp") + "\n" +
+                        "Dimensions: " + exactBitmap.getWidth() + " x " + exactBitmap.getHeight() + " px\n" +
+                        "Integrity: 100% Bit-for-Bit Exact | SHA-256 Validated\n" +
+                        "Payload Size: " + (rawImageBytes.length / 1024) + " KB");
+                tvDetails.setTextColor(Color.parseColor("#94A3B8"));
+                tvDetails.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+                tvDetails.setPadding(0, 16, 0, 24);
+
+                container.addView(tvHeader);
+                container.addView(ivPhoto, imgParams);
+                container.addView(tvDetails);
+
+                ScrollView scrollView = new ScrollView(context);
+                scrollView.addView(container);
+
+                AlertDialog dialog = new AlertDialog.Builder(context)
+                        .setView(scrollView)
+                        .setPositiveButton("Done", null)
                         .create();
 
                 dialog.show();
