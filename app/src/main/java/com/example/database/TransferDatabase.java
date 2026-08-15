@@ -1,5 +1,6 @@
 package com.example.database;
 
+import android.annotation.SuppressLint;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
@@ -8,12 +9,14 @@ import android.database.sqlite.SQLiteOpenHelper;
 
 import com.example.models.DataPacket;
 import com.example.models.TransferItem;
+import com.example.utils.AirLogger;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class TransferDatabase extends SQLiteOpenHelper {
 
+    private static final String TAG = "TransferDatabase";
     private static final String DATABASE_NAME = "transfers.db";
     private static final int DATABASE_VERSION = 1;
 
@@ -28,6 +31,7 @@ public class TransferDatabase extends SQLiteOpenHelper {
     public static final String KEY_MODE = "mode";
     public static final String KEY_TOTAL_PACKETS = "total_packets";
     public static final String KEY_RECEIVED_PACKETS = "received_packets";
+    public static final String KEY_FILE_ID_META = "file_id_meta"; // Added to link Transfers with Packets
 
     public static final String KEY_FILE_ID = "file_id";
     public static final String KEY_PACKET_INDEX = "packet_index";
@@ -51,6 +55,7 @@ public class TransferDatabase extends SQLiteOpenHelper {
     public void onCreate(SQLiteDatabase db) {
         String CREATE_TRANSFERS_TABLE = "CREATE TABLE " + TABLE_TRANSFERS + "("
                 + KEY_ID + " INTEGER PRIMARY KEY AUTOINCREMENT,"
+                + KEY_FILE_ID_META + " TEXT UNIQUE,"
                 + KEY_FILENAME + " TEXT,"
                 + KEY_SIZE + " INTEGER,"
                 + KEY_PROGRESS + " INTEGER,"
@@ -65,7 +70,8 @@ public class TransferDatabase extends SQLiteOpenHelper {
                 + KEY_PACKET_INDEX + " INTEGER,"
                 + KEY_TOTAL_PACKETS + " INTEGER,"
                 + KEY_PAYLOAD + " TEXT,"
-                + KEY_CHECKSUM + " INTEGER" + ")";
+                + KEY_CHECKSUM + " INTEGER,"
+                + "UNIQUE(" + KEY_FILE_ID + ", " + KEY_PACKET_INDEX + ") ON CONFLICT IGNORE" + ")";
 
         db.execSQL(CREATE_TRANSFERS_TABLE);
         db.execSQL(CREATE_PACKETS_TABLE);
@@ -82,6 +88,7 @@ public class TransferDatabase extends SQLiteOpenHelper {
 
     private void seedSampleTransfers(SQLiteDatabase db) {
         ContentValues t1 = new ContentValues();
+        t1.put(KEY_FILE_ID_META, "SYS_SMS_001");
         t1.put(KEY_FILENAME, "emergency_coordinates.json");
         t1.put(KEY_SIZE, 4096);
         t1.put(KEY_PROGRESS, 100);
@@ -92,6 +99,7 @@ public class TransferDatabase extends SQLiteOpenHelper {
         db.insert(TABLE_TRANSFERS, null, t1);
 
         ContentValues t2 = new ContentValues();
+        t2.put(KEY_FILE_ID_META, "SYS_AUD_002");
         t2.put(KEY_FILENAME, "telemetry_stream.bin");
         t2.put(KEY_SIZE, 12288);
         t2.put(KEY_PROGRESS, 45);
@@ -105,6 +113,7 @@ public class TransferDatabase extends SQLiteOpenHelper {
     public long insertTransfer(TransferItem item) {
         SQLiteDatabase db = this.getWritableDatabase();
         ContentValues cv = new ContentValues();
+        cv.put(KEY_FILE_ID_META, item.getFileId());
         cv.put(KEY_FILENAME, item.getFilename());
         cv.put(KEY_SIZE, item.getSize());
         cv.put(KEY_PROGRESS, item.getProgress());
@@ -112,7 +121,35 @@ public class TransferDatabase extends SQLiteOpenHelper {
         cv.put(KEY_MODE, item.getMode());
         cv.put(KEY_TOTAL_PACKETS, item.getTotalPackets());
         cv.put(KEY_RECEIVED_PACKETS, item.getReceivedPackets());
-        return db.insert(TABLE_TRANSFERS, null, cv);
+        return db.insertWithOnConflict(TABLE_TRANSFERS, null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    public void updateTransferStatus(String fileId, String newStatus) {
+        SQLiteDatabase db = this.getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put(KEY_STATUS, newStatus);
+        db.update(TABLE_TRANSFERS, cv, KEY_FILE_ID_META + "=?", new String[]{fileId});
+    }
+
+    @SuppressLint("Range")
+    public TransferItem getTransfer(String fileId) {
+        if (fileId == null || fileId.isEmpty()) return null;
+        SQLiteDatabase db = this.getReadableDatabase();
+        Cursor cursor = db.query(TABLE_TRANSFERS, null, KEY_FILE_ID_META + "=?", new String[]{fileId}, null, null, null);
+        TransferItem item = null;
+        if (cursor.moveToFirst()) {
+            long id = cursor.getLong(cursor.getColumnIndex(KEY_ID));
+            String name = cursor.getString(cursor.getColumnIndex(KEY_FILENAME));
+            long size = cursor.getLong(cursor.getColumnIndex(KEY_SIZE));
+            int progress = cursor.getInt(cursor.getColumnIndex(KEY_PROGRESS));
+            String status = cursor.getString(cursor.getColumnIndex(KEY_STATUS));
+            String mode = cursor.getString(cursor.getColumnIndex(KEY_MODE));
+            int total = cursor.getInt(cursor.getColumnIndex(KEY_TOTAL_PACKETS));
+            int received = cursor.getInt(cursor.getColumnIndex(KEY_RECEIVED_PACKETS));
+            item = new TransferItem(id, fileId, name, size, progress, status, mode, total, received);
+        }
+        cursor.close();
+        return item;
     }
 
     public List<TransferItem> getAllTransfers() {
@@ -122,6 +159,7 @@ public class TransferDatabase extends SQLiteOpenHelper {
         if (cursor.moveToFirst()) {
             do {
                 long id = cursor.getLong(cursor.getColumnIndexOrThrow(KEY_ID));
+                String fileId = cursor.getString(cursor.getColumnIndexOrThrow(KEY_FILE_ID_META));
                 String name = cursor.getString(cursor.getColumnIndexOrThrow(KEY_FILENAME));
                 long size = cursor.getLong(cursor.getColumnIndexOrThrow(KEY_SIZE));
                 int progress = cursor.getInt(cursor.getColumnIndexOrThrow(KEY_PROGRESS));
@@ -130,7 +168,7 @@ public class TransferDatabase extends SQLiteOpenHelper {
                 int total = cursor.getInt(cursor.getColumnIndexOrThrow(KEY_TOTAL_PACKETS));
                 int received = cursor.getInt(cursor.getColumnIndexOrThrow(KEY_RECEIVED_PACKETS));
 
-                list.add(new TransferItem(id, name, size, progress, status, mode, total, received));
+                list.add(new TransferItem(id, fileId, name, size, progress, status, mode, total, received));
             } while (cursor.moveToNext());
         }
         cursor.close();
@@ -138,17 +176,62 @@ public class TransferDatabase extends SQLiteOpenHelper {
     }
 
     public void savePacket(DataPacket packet) {
+        insertPacketAndUpdateProgress(packet);
+    }
+
+    /**
+     * Atomically inserts a new packet payload and increments the master transfer progress.
+     * Returns true if all packets have been received.
+     */
+    public boolean insertPacketAndUpdateProgress(DataPacket packet) {
         SQLiteDatabase db = this.getWritableDatabase();
-        ContentValues cv = new ContentValues();
-        cv.put(KEY_FILE_ID, packet.getFileId());
-        cv.put(KEY_PACKET_INDEX, packet.getPacketIndex());
-        cv.put(KEY_TOTAL_PACKETS, packet.getTotalPackets());
-        cv.put(KEY_PAYLOAD, packet.getPayload());
-        cv.put(KEY_CHECKSUM, packet.getChecksum());
-        db.insert(TABLE_PACKETS, null, cv);
+        db.beginTransaction();
+        boolean isComplete = false;
+        try {
+            // Insert Packet (IGNORE if already exists due to UNIQUE constraint)
+            ContentValues cv = new ContentValues();
+            cv.put(KEY_FILE_ID, packet.getFileId());
+            cv.put(KEY_PACKET_INDEX, packet.getPacketIndex());
+            cv.put(KEY_TOTAL_PACKETS, packet.getTotalPackets());
+            cv.put(KEY_PAYLOAD, packet.getPayload());
+            cv.put(KEY_CHECKSUM, packet.getChecksum());
+            long rowId = db.insertWithOnConflict(TABLE_PACKETS, null, cv, SQLiteDatabase.CONFLICT_IGNORE);
+
+            // If a new row was inserted, update parent TransferItem received count
+            if (rowId != -1) {
+                Cursor countCursor = db.rawQuery("SELECT COUNT(*) FROM " + TABLE_PACKETS + " WHERE " + KEY_FILE_ID + "=?", new String[]{packet.getFileId()});
+                int currentReceived = 0;
+                if (countCursor.moveToFirst()) {
+                    currentReceived = countCursor.getInt(0);
+                }
+                countCursor.close();
+
+                int progressPercent = (int) (((double) currentReceived / packet.getTotalPackets()) * 100);
+                
+                ContentValues updateCv = new ContentValues();
+                updateCv.put(KEY_RECEIVED_PACKETS, currentReceived);
+                updateCv.put(KEY_PROGRESS, progressPercent);
+                updateCv.put(KEY_STATUS, currentReceived >= packet.getTotalPackets() ? "ASSEMBLING" : "TRANSFERRING");
+                
+                db.update(TABLE_TRANSFERS, updateCv, KEY_FILE_ID_META + "=?", new String[]{packet.getFileId()});
+
+                isComplete = (currentReceived >= packet.getTotalPackets());
+            }
+
+            db.setTransactionSuccessful();
+        } catch (Exception e) {
+            AirLogger.e(TAG, "Error atomically saving packet and updating ledger", e);
+        } finally {
+            db.endTransaction();
+        }
+        return isComplete;
     }
 
     public List<DataPacket> getPacketsForFile(String fileId) {
+        return getAllPackets(fileId);
+    }
+
+    public List<DataPacket> getAllPackets(String fileId) {
         List<DataPacket> list = new ArrayList<>();
         SQLiteDatabase db = this.getReadableDatabase();
         Cursor cursor = db.query(TABLE_PACKETS, null, KEY_FILE_ID + "=?", new String[]{fileId}, null, null, KEY_PACKET_INDEX + " ASC");
