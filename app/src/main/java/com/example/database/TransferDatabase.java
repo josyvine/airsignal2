@@ -18,7 +18,9 @@ public class TransferDatabase extends SQLiteOpenHelper {
 
     private static final String TAG = "TransferDatabase";
     private static final String DATABASE_NAME = "transfers.db";
-    private static final int DATABASE_VERSION = 1;
+    
+    // INCREMENTED TO 2: Forces onUpgrade to run and recreate tables with new file_id_meta column
+    private static final int DATABASE_VERSION = 2;
 
     public static final String TABLE_TRANSFERS = "transfers";
     public static final String TABLE_PACKETS = "packets";
@@ -81,6 +83,7 @@ public class TransferDatabase extends SQLiteOpenHelper {
 
     @Override
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        // Drop older legacy tables and recreate to prevent missing column exceptions
         db.execSQL("DROP TABLE IF EXISTS " + TABLE_TRANSFERS);
         db.execSQL("DROP TABLE IF EXISTS " + TABLE_PACKETS);
         onCreate(db);
