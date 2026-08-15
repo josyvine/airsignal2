@@ -17,6 +17,8 @@ public class TemplateCatalog {
     public static final int TEMPLATE_ROADBLOCK_INFRASTRUCTURE = 3;
     public static final int TEMPLATE_LOGISTICS_SUPPLY_GRID = 4;
     public static final int TEMPLATE_SEARCH_RESCUE_STATUS = 5;
+    public static final int TEMPLATE_IMAGE_WEBP_LOSSLESS = 6;
+    public static final int TEMPLATE_IMAGE_PNG_LOSSLESS = 7;
 
     private static final Map<Integer, TemplateDefinition> CATALOG = new HashMap<>();
 
@@ -106,6 +108,34 @@ public class TemplateCatalog {
         rescueTemplate.addFormField(new FormField("boat_count", "Inflatable / Motor Boats", FormField.TYPE_NUMBER, "2", "Boats"));
         rescueTemplate.addFormField(new FormField("comms_channel", "VHF Radio Frequency", FormField.TYPE_TEXT, "156.800 MHz", ""));
         CATALOG.put(TEMPLATE_SEARCH_RESCUE_STATUS, rescueTemplate);
+
+        // -------------------------------------------------------------
+        // Template 6: Lossless WebP Photo Container (640x480)
+        // -------------------------------------------------------------
+        TemplateDefinition webpTemplate = new TemplateDefinition(
+                TEMPLATE_IMAGE_WEBP_LOSSLESS,
+                TemplateToken.CATEGORY_LOSSLESS_IMAGE,
+                "Lossless WebP Photo Container",
+                "Pre-built dictionary container for lossless WebP raw pixel streaming with zero quality loss."
+        );
+        webpTemplate.addFormField(new FormField("image_width", "Image Width", FormField.TYPE_NUMBER, "640", "px"));
+        webpTemplate.addFormField(new FormField("image_height", "Image Height", FormField.TYPE_NUMBER, "480", "px"));
+        webpTemplate.addFormField(new FormField("color_depth", "Color Space", FormField.TYPE_TEXT, "ARGB_8888", ""));
+        CATALOG.put(TEMPLATE_IMAGE_WEBP_LOSSLESS, webpTemplate);
+
+        // -------------------------------------------------------------
+        // Template 7: Lossless PNG Graphic Container (320x240)
+        // -------------------------------------------------------------
+        TemplateDefinition pngTemplate = new TemplateDefinition(
+                TEMPLATE_IMAGE_PNG_LOSSLESS,
+                TemplateToken.CATEGORY_LOSSLESS_IMAGE,
+                "Lossless PNG Graphic Container",
+                "Pre-built dictionary container for lossless PNG thumbnails and diagram bitmaps."
+        );
+        pngTemplate.addFormField(new FormField("image_width", "Image Width", FormField.TYPE_NUMBER, "320", "px"));
+        pngTemplate.addFormField(new FormField("image_height", "Image Height", FormField.TYPE_NUMBER, "240", "px"));
+        pngTemplate.addFormField(new FormField("color_depth", "Color Space", FormField.TYPE_TEXT, "RGB_565", ""));
+        CATALOG.put(TEMPLATE_IMAGE_PNG_LOSSLESS, pngTemplate);
     }
 
     public static TemplateDefinition getTemplate(int templateId) {
@@ -137,6 +167,7 @@ public class TemplateCatalog {
             case TemplateToken.ICON_MEDICAL: return "Medical Emergency / Casualty";
             case TemplateToken.ICON_SHELTER: return "Evacuation Shelter / Camp";
             case TemplateToken.ICON_HAZARD: return "Severe Electrical / Gas Hazard";
+            case TemplateToken.ICON_IMAGE_CONTAINER: return "Exact Lossless Image Container";
             default: return "General Marker";
         }
     }
@@ -152,6 +183,7 @@ public class TemplateCatalog {
             case TemplateToken.ICON_MEDICAL: return Color.parseColor("#DC2626");
             case TemplateToken.ICON_SHELTER: return Color.parseColor("#10B981");
             case TemplateToken.ICON_HAZARD: return Color.parseColor("#8B5CF6");
+            case TemplateToken.ICON_IMAGE_CONTAINER: return Color.parseColor("#38BDF8");
             default: return Color.parseColor("#38BDF8");
         }
     }
