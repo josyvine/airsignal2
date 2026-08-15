@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.database.Cursor;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -34,6 +35,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.example.R;
 import com.example.adapters.TransferAdapter;
 import com.example.audio.AudioEncoder;
+import com.example.call.CallManager;
 import com.example.database.TransferDatabase;
 import com.example.knowledge.PhoneticImageTransceiver;
 import com.example.knowledge.PhoneticTokenManager;
@@ -42,6 +44,7 @@ import com.example.knowledge.VisualRenderer;
 import com.example.models.DataPacket;
 import com.example.models.TemplateToken;
 import com.example.models.TransferItem;
+import com.example.services.AirSignalInCallService;
 import com.example.services.AudioTransferService;
 import com.example.services.SmsTransferService;
 import com.example.utils.AirLogger;
@@ -167,7 +170,6 @@ public class TransferFragment extends Fragment {
                 .setTitle("Offline Data Transfer Hub")
                 .setItems(options, (dialog, which) -> {
                     if (which == 0) {
-                        // Open Native Android Storage Access Framework
                         filePickerLauncher.launch("*/*");
                     } else if (which == 1) {
                         showCustomTemplateBuilderDialog();
@@ -216,14 +218,13 @@ public class TransferFragment extends Fragment {
     }
 
     /**
-     * Interactive Custom Template Builder Dialog (Zero Hardcoding)
+     * Interactive Custom Template Builder Dialog
      */
     private void showCustomTemplateBuilderDialog() {
         LinearLayout container = new LinearLayout(requireContext());
         container.setOrientation(LinearLayout.VERTICAL);
         container.setPadding(32, 24, 32, 24);
 
-        // 1. Template Selector
         TextView tvTpl = new TextView(requireContext());
         tvTpl.setText("Select Base Template:");
         tvTpl.setTextColor(Color.WHITE);
@@ -239,7 +240,6 @@ public class TransferFragment extends Fragment {
         ArrayAdapter<String> tplAdapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, tplNames);
         spTemplates.setAdapter(tplAdapter);
 
-        // 2. Hazard Stamp Selector
         TextView tvIcon = new TextView(requireContext());
         tvIcon.setText("Select Marker / Hazard Stamp:");
         tvIcon.setTextColor(Color.WHITE);
@@ -257,7 +257,6 @@ public class TransferFragment extends Fragment {
         ArrayAdapter<String> iconAdapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, iconNames);
         spIcons.setAdapter(iconAdapter);
 
-        // 3. Severity Level
         TextView tvSev = new TextView(requireContext());
         tvSev.setText("Priority / Severity Level:");
         tvSev.setTextColor(Color.WHITE);
@@ -273,7 +272,6 @@ public class TransferFragment extends Fragment {
         ArrayAdapter<String> sevAdapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, sevNames);
         spSeverity.setAdapter(sevAdapter);
 
-        // 4. Metric Value Input (e.g. Water depth in cm)
         TextView tvVal = new TextView(requireContext());
         tvVal.setText("Metric Value (e.g. Water Depth in cm / Count):");
         tvVal.setTextColor(Color.WHITE);
@@ -299,7 +297,7 @@ public class TransferFragment extends Fragment {
         new AlertDialog.Builder(requireContext())
                 .setTitle("Custom Visual Template Builder")
                 .setView(scrollView)
-                .setPositiveButton("Transmit Audio Burst", (dialog, which) -> {
+                .setPositiveButton("Transmit via Call", (dialog, which) -> {
                     int tplId = spTemplates.getSelectedItemPosition() + 1;
                     int iconId = spIcons.getSelectedItemPosition() + 1;
                     int sevId = spSeverity.getSelectedItemPosition() + 1;
@@ -312,23 +310,25 @@ public class TransferFragment extends Fragment {
                             TemplateToken.MODE_PHONETIC_TOKEN,
                             TemplateToken.CATEGORY_TACTICAL_MAP,
                             tplId,
-                            18500, // Custom Coordinate X
-                            35000, // Custom Coordinate Y
+                            18500,
+                            35000,
                             iconId,
                             sevId,
                             val,
                             0
                     );
 
-                    String natoString = PhoneticTokenManager.encodeToPhoneticWords(customToken);
-                    AirLogger.i(TAG, "Broadcasting custom template token: " + natoString);
-
-                    Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
-                    serviceIntent.setAction(AudioTransferService.ACTION_SEND_TOKEN);
-                    serviceIntent.putExtra(AudioTransferService.EXTRA_TOKEN_PAYLOAD, customToken.toByteArray());
-                    requireContext().startService(serviceIntent);
-
-                    Toast.makeText(requireContext(), "Transmitting Acoustic Burst (~0.8s)...", Toast.LENGTH_SHORT).show();
+                    // Check if call is already connected
+                    if (AirSignalInCallService.getActiveCall() != null) {
+                        Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
+                        serviceIntent.setAction(AudioTransferService.ACTION_SEND_TOKEN);
+                        serviceIntent.putExtra(AudioTransferService.EXTRA_TOKEN_PAYLOAD, customToken.toByteArray());
+                        requireContext().startService(serviceIntent);
+                        Toast.makeText(requireContext(), "Streaming Token into Active Call...", Toast.LENGTH_SHORT).show();
+                    } else {
+                        // Prompt for phone number and place real cellular call
+                        promptPhoneNumberAndPlaceCall(customToken.toByteArray(), null);
+                    }
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -352,21 +352,23 @@ public class TransferFragment extends Fragment {
 
         List<byte[]> binaryPackets = DataPacketManager.createBinaryPackets(fileBytes);
         String fileId = UUID.randomUUID().toString().substring(0, 8);
-
         double estMinutes = (binaryPackets.size() * 263.0) / (300.0 * 60.0);
 
         new AlertDialog.Builder(requireContext())
                 .setTitle("Transmit Exact Lossless File")
                 .setMessage("File: " + selectedFileName + "\nSize: " + (selectedFileSize / 1024) + " KB\nTotal Audio Packets: " + binaryPackets.size() +
-                        "\nEst. Transfer Time: ~" + String.format("%.1f", estMinutes) + " min @ 2400 Baud\n\nEnsure voice call is active.")
-                .setPositiveButton("Start 2400 Baud Stream", (dialog, which) -> {
+                        "\nEst. Transfer Time: ~" + String.format("%.1f", estMinutes) + " min @ 2400 Baud")
+                .setPositiveButton("Dial Call & Start Stream", (dialog, which) -> {
                     TransferItem item = new TransferItem(fileId, selectedFileName, selectedFileSize, 0, "TRANSFERRING", "RAW_BINARY_2400", binaryPackets.size(), 0);
                     transferDb.insertTransfer(item);
 
-                    Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
-                    requireContext().startService(serviceIntent);
-
-                    Toast.makeText(requireContext(), "Lossless Binary Stream Started in Background", Toast.LENGTH_LONG).show();
+                    if (AirSignalInCallService.getActiveCall() != null) {
+                        Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
+                        requireContext().startService(serviceIntent);
+                        Toast.makeText(requireContext(), "Streaming into Active Call...", Toast.LENGTH_SHORT).show();
+                    } else {
+                        promptPhoneNumberAndPlaceCall(null, null);
+                    }
                     loadTransfers();
                 })
                 .setNegativeButton("Cancel", null)
@@ -386,50 +388,88 @@ public class TransferFragment extends Fragment {
         new AlertDialog.Builder(requireContext())
                 .setTitle("Phonetic Base64 Image Transfer")
                 .setMessage("File: " + selectedFileName + "\nThis encodes your image, substitutes 500-char blocks using Phonetic Dictionary words (ALPHA, BRAVO...), and transmits it over the active voice call.")
-                .setPositiveButton("Transmit Image", (dialog, which) -> {
-                    AudioEncoder encoder = new AudioEncoder(2400);
+                .setPositiveButton("Transmit over Call", (dialog, which) -> {
+                    if (AirSignalInCallService.getActiveCall() != null) {
+                        AudioEncoder encoder = new AudioEncoder(2400);
+                        PhoneticImageTransceiver.sendImageViaPhoneticDictionary(
+                                requireContext(),
+                                localCachedFile,
+                                encoder,
+                                new PhoneticImageTransceiver.OnPhoneticTransferListener() {
+                                    @Override
+                                    public void onProgress(int step, int totalSteps, String statusMessage) {
+                                        if (getActivity() != null) {
+                                            getActivity().runOnUiThread(() -> Toast.makeText(requireContext(), statusMessage, Toast.LENGTH_SHORT).show());
+                                        }
+                                    }
 
-                    PhoneticImageTransceiver.sendImageViaPhoneticDictionary(
-                            requireContext(),
-                            localCachedFile,
-                            encoder,
-                            new PhoneticImageTransceiver.OnPhoneticTransferListener() {
-                                @Override
-                                public void onProgress(int step, int totalSteps, String statusMessage) {
-                                    if (getActivity() != null) {
-                                        getActivity().runOnUiThread(() -> Toast.makeText(requireContext(), statusMessage, Toast.LENGTH_SHORT).show());
+                                    @Override
+                                    public void onSuccess(int totalTokensSent, int originalBase64Length) {
+                                        if (getActivity() != null) {
+                                            getActivity().runOnUiThread(() -> {
+                                                TransferItem item = new TransferItem(
+                                                        "PHON_" + System.currentTimeMillis(),
+                                                        selectedFileName,
+                                                        selectedFileSize,
+                                                        100,
+                                                        TransferItem.STATUS_COMPLETED,
+                                                        TransferItem.MODE_PHONETIC_TOKEN,
+                                                        totalTokensSent,
+                                                        totalTokensSent
+                                                );
+                                                transferDb.insertTransfer(item);
+                                                loadTransfers();
+                                                Toast.makeText(requireContext(), "Image Transmitted over Call! (" + totalTokensSent + " tokens)", Toast.LENGTH_LONG).show();
+                                            });
+                                        }
+                                    }
+
+                                    @Override
+                                    public void onError(Exception e) {
+                                        if (getActivity() != null) {
+                                            getActivity().runOnUiThread(() -> Toast.makeText(requireContext(), "Transfer Failed: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+                                        }
                                     }
                                 }
+                        );
+                    } else {
+                        // Prompt for phone number and place real cellular call
+                        promptPhoneNumberAndPlaceCall(null, localCachedFile);
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
 
-                                @Override
-                                public void onSuccess(int totalTokensSent, int originalBase64Length) {
-                                    if (getActivity() != null) {
-                                        getActivity().runOnUiThread(() -> {
-                                            TransferItem item = new TransferItem(
-                                                    "PHON_" + System.currentTimeMillis(),
-                                                    selectedFileName,
-                                                    selectedFileSize,
-                                                    100,
-                                                    TransferItem.STATUS_COMPLETED,
-                                                    TransferItem.MODE_PHONETIC_TOKEN,
-                                                    totalTokensSent,
-                                                    totalTokensSent
-                                            );
-                                            transferDb.insertTransfer(item);
-                                            loadTransfers();
-                                            Toast.makeText(requireContext(), "Image Transmitted Successfully! (" + totalTokensSent + " tokens)", Toast.LENGTH_LONG).show();
-                                        });
-                                    }
-                                }
+    private void promptPhoneNumberAndPlaceCall(final byte[] tokenPayload, final File imageToTransmit) {
+        final EditText etPhone = new EditText(requireContext());
+        etPhone.setHint("Enter Target Phone Number to Call");
+        etPhone.setPadding(32, 32, 32, 32);
 
-                                @Override
-                                public void onError(Exception e) {
-                                    if (getActivity() != null) {
-                                        getActivity().runOnUiThread(() -> Toast.makeText(requireContext(), "Transfer Failed: " + e.getMessage(), Toast.LENGTH_SHORT).show());
-                                    }
-                                }
-                            }
-                    );
+        new AlertDialog.Builder(requireContext())
+                .setTitle("Dial Audio Data Call")
+                .setMessage("Enter the recipient's phone number. AirSignal will place the cellular voice call and stream the data once answered.")
+                .setView(etPhone)
+                .setPositiveButton("Call & Transmit", (dialog, which) -> {
+                    String phone = etPhone.getText().toString().trim();
+                    if (!phone.isEmpty()) {
+                        // 1. Start audio transfer service
+                        Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
+                        if (tokenPayload != null) {
+                            serviceIntent.setAction(AudioTransferService.ACTION_SEND_TOKEN);
+                            serviceIntent.putExtra(AudioTransferService.EXTRA_TOKEN_PAYLOAD, tokenPayload);
+                        } else if (imageToTransmit != null) {
+                            serviceIntent.setAction(AudioTransferService.ACTION_SEND_PHONETIC_IMAGE);
+                            serviceIntent.putExtra(AudioTransferService.EXTRA_IMAGE_PATH, imageToTransmit.getAbsolutePath());
+                        }
+                        requireContext().startService(serviceIntent);
+
+                        // 2. DIAL THE REAL CELLULAR CALL
+                        CallManager.placeCall(requireContext(), phone);
+                        Toast.makeText(requireContext(), "Dialing cellular call to " + phone + "...", Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(requireContext(), "Please enter a valid phone number", Toast.LENGTH_SHORT).show();
+                    }
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -516,15 +556,27 @@ public class TransferFragment extends Fragment {
                 TransferItem item = new TransferItem(fileId, selectedFileName.equals("None") ? "stream_audio_data.bin" : selectedFileName, selectedFileSize > 0 ? selectedFileSize : 8192, 10, "TRANSFERRING", "AUDIO_DATA", 16, 2);
                 transferDb.insertTransfer(item);
 
+                // 1. Start audio transfer service
                 Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
                 requireContext().startService(serviceIntent);
 
-                Toast.makeText(requireContext(), "Audio Call Data Transfer Started!", Toast.LENGTH_SHORT).show();
+                // 2. ACTUALLY DIAL THE REAL CELLULAR CALL
+                CallManager.placeCall(requireContext(), phone);
+
+                Toast.makeText(requireContext(), "Dialing Audio Call to " + phone + "...", Toast.LENGTH_SHORT).show();
                 dialog.dismiss();
                 loadTransfers();
             }
         });
 
         dialog.show();
+    }
+
+    private int dpToPx(int dp) {
+        return (int) TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                dp,
+                getResources().getDisplayMetrics()
+        );
     }
 }
