@@ -63,6 +63,16 @@ public class AirLogger {
         writeLog("DEBUG", tag, message, null);
     }
 
+    public static void w(String tag, String message) {
+        Log.w(tag, message);
+        writeLog("WARN", tag, message, null);
+    }
+
+    public static void w(String tag, String message, Throwable t) {
+        Log.w(tag, message, t);
+        writeLog("WARN", tag, message, t);
+    }
+
     public static void e(String tag, String message) {
         Log.e(tag, message);
         writeLog("ERROR", tag, message, null);
