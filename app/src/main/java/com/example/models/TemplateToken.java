@@ -4,6 +4,7 @@ public class TemplateToken {
 
     public static final int TOKEN_BYTE_SIZE = 16;
     public static final int MODE_PHONETIC_TOKEN = 0x01;
+    public static final int MODE_LOSSLESS_IMAGE_HEADER = 0x02;
 
     // Categories
     public static final int CATEGORY_TACTICAL_MAP = 0x01;
@@ -11,6 +12,8 @@ public class TemplateToken {
     public static final int CATEGORY_MEDICAL_TRIAGE = 0x03;
     public static final int CATEGORY_LOGISTICS = 0x04;
     public static final int CATEGORY_CUSTOM_VECTOR = 0x05;
+    public static final int CATEGORY_LOSSLESS_IMAGE = 0x06;
+    public static final int CATEGORY_DISASTER_HAZARD = 0x07;
 
     // Icons / Stamps
     public static final int ICON_NONE = 0x00;
@@ -20,6 +23,7 @@ public class TemplateToken {
     public static final int ICON_MEDICAL = 0x04;
     public static final int ICON_SHELTER = 0x05;
     public static final int ICON_HAZARD = 0x06;
+    public static final int ICON_IMAGE_CONTAINER = 0x07;
 
     // Severity Levels
     public static final int SEVERITY_LOW = 0x01;
@@ -30,11 +34,11 @@ public class TemplateToken {
     private int mode;          // 1 Byte
     private int categoryId;    // 1 Byte
     private int templateId;    // 2 Bytes (0 - 65535)
-    private int paramX;        // 2 Bytes (0 - 65535 Canvas X)
-    private int paramY;        // 2 Bytes (0 - 65535 Canvas Y)
+    private int paramX;        // 2 Bytes (0 - 65535 Canvas X or Image Width)
+    private int paramY;        // 2 Bytes (0 - 65535 Canvas Y or Image Height)
     private int stampIcon;     // 1 Byte
     private int severity;      // 1 Byte
-    private int paramValue;    // 2 Bytes (e.g. depth in cm, triage score)
+    private int paramValue;    // 2 Bytes (e.g. depth in cm, triage score, or chunk count)
     private int reserved;      // 2 Bytes
     private int crc16;         // 2 Bytes
 
