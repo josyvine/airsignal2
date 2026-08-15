@@ -4,6 +4,7 @@ import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioTrack;
 
+import com.example.knowledge.PhoneticImageTransceiver;
 import com.example.models.TemplateToken;
 import com.example.utils.AirLogger;
 
@@ -114,6 +115,18 @@ public class AudioEncoder {
         }
         byte[] tokenBytes = token.toByteArray();
         transmitDataOverAudio(tokenBytes, listener);
+    }
+
+    /**
+     * Dedicated Feature: Transmits a list of Phonetic Base64 Dictionary words as a structured FSK sequence.
+     */
+    public void transmitPhoneticBase64Sequence(final List<String> phoneticWords, final OnTransmissionProgressListener listener) {
+        if (phoneticWords == null || phoneticWords.isEmpty()) {
+            if (listener != null) listener.onError(new IllegalArgumentException("Phonetic words list is empty"));
+            return;
+        }
+        byte[] payload = PhoneticImageTransceiver.formatTokensForTransmission(phoneticWords);
+        transmitDataOverAudio(payload, listener);
     }
 
     /**
