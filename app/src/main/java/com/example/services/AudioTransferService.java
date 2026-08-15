@@ -15,10 +15,14 @@ import androidx.core.app.NotificationCompat;
 
 import com.example.audio.AudioEncoder;
 import com.example.audio.AudioReceiver;
+import com.example.knowledge.PhoneticImageTransceiver;
 import com.example.knowledge.VisualRenderer;
 import com.example.models.TemplateToken;
 import com.example.utils.AirLogger;
 import com.example.utils.FileAssembler;
+
+import java.io.File;
+import java.util.List;
 
 public class AudioTransferService extends Service implements AudioReceiver.AudioReceiverListener {
 
@@ -27,8 +31,11 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
     private static final int NOTIFICATION_ID = 202;
 
     public static final String ACTION_SEND_TOKEN = "com.example.ACTION_SEND_TOKEN";
+    public static final String ACTION_SEND_PHONETIC_IMAGE = "com.example.ACTION_SEND_PHONETIC_IMAGE";
     public static final String ACTION_STOP_SERVICE = "com.example.ACTION_STOP_SERVICE";
+    
     public static final String EXTRA_TOKEN_PAYLOAD = "extra_token_payload";
+    public static final String EXTRA_IMAGE_PATH = "extra_image_path";
 
     private AudioReceiver audioReceiver;
     private AudioEncoder audioEncoder;
@@ -38,7 +45,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
 
     @Override
     public IBinder onBind(Intent intent) {
-        return null; // Not using bound service interface
+        return null;
     }
 
     @Override
@@ -67,6 +74,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
             return START_NOT_STICKY;
         }
 
+        // 1. Process Outbound Mode 4 Semantic Token Action
         if (intent != null && ACTION_SEND_TOKEN.equals(intent.getAction())) {
             byte[] tokenBytes = intent.getByteArrayExtra(EXTRA_TOKEN_PAYLOAD);
             if (tokenBytes != null) {
@@ -93,6 +101,41 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
             return START_STICKY;
         }
 
+        // 2. Process Outbound Phonetic Base64 Image Action
+        if (intent != null && ACTION_SEND_PHONETIC_IMAGE.equals(intent.getAction())) {
+            String imagePath = intent.getStringExtra(EXTRA_IMAGE_PATH);
+            if (imagePath != null) {
+                File imgFile = new File(imagePath);
+                if (imgFile.exists()) {
+                    PhoneticImageTransceiver.sendImageViaPhoneticDictionary(
+                            getApplicationContext(),
+                            imgFile,
+                            audioEncoder,
+                            new PhoneticImageTransceiver.OnPhoneticTransferListener() {
+                                @Override
+                                public void onProgress(int step, int totalSteps, String statusMessage) {
+                                    updateNotification("Phonetic Image: " + statusMessage, (step * 25));
+                                }
+
+                                @Override
+                                public void onSuccess(int totalTokensSent, int originalBase64Length) {
+                                    updateNotification("Image Sent! (" + totalTokensSent + " tokens)", 100);
+                                    new android.os.Handler(getMainLooper()).postDelayed(() -> {
+                                        updateNotification("Listening for incoming data...", 0);
+                                    }, 3000);
+                                }
+
+                                @Override
+                                public void onError(Exception e) {
+                                    updateNotification("Image Send Failed: " + e.getMessage(), 0);
+                                }
+                            }
+                    );
+                }
+            }
+            return START_STICKY;
+        }
+
         if (wakeLock != null && !wakeLock.isHeld()) {
             wakeLock.acquire(60 * 60 * 1000L /* 1 hour max timeout */);
         }
@@ -110,7 +153,6 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
         // Prepare audio environment for FSK acoustic tone capture
         AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         if (audioManager != null) {
-            // Force speaker routing if not currently inside a cellular call to allow Acoustic Air-Gap
             if (audioManager.getMode() != AudioManager.MODE_IN_CALL && audioManager.getMode() != AudioManager.MODE_IN_COMMUNICATION) {
                 audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
                 audioManager.setSpeakerphoneOn(true);
@@ -166,24 +208,35 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
     @Override
     public void onFrameDecoded(byte[] frameData) {
         if (frameData == null || frameData.length == 0) return;
-        
+
+        // Check if frame contains the Phonetic Base64 Image signature
+        String previewStr = new String(frameData, java.nio.charset.StandardCharsets.UTF_8);
+        if (previewStr.startsWith(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE)) {
+            AirLogger.i(TAG, "Detected incoming Phonetic Base64 Image stream!");
+            List<String> tokens = PhoneticImageTransceiver.parseTransmissionToTokens(frameData);
+            PhoneticImageTransceiver.receiveAndReconstructImage(getApplicationContext(), tokens, "received_phonetic_photo.webp");
+            
+            updateNotification("Received Phonetic Image!", 100);
+            new android.os.Handler(getMainLooper()).postDelayed(() -> {
+                updateNotification("Listening for incoming data...", 0);
+            }, 3000);
+            return;
+        }
+
         // Mode 2/3: Pass exact lossless binary frames to FileAssembler for GZIP decompression
-        // and file reconstruction.
         AirLogger.i(TAG, "Received raw binary frame (" + frameData.length + " bytes). Passing to Assembler.");
-        // Note: FileAssembler updates will process this raw stream directly.
         FileAssembler.processIncomingBinaryFrame(getApplicationContext(), frameData);
     }
 
     @Override
     public void onTokenDecoded(TemplateToken token) {
         if (token == null) return;
-        
+
         AirLogger.i(TAG, "Received valid Mode 4 Template Token! Category ID: " + token.getCategoryId());
 
         // Mode 4: Automatic zero-touch visual layout reconstruction popup
         VisualRenderer.showVisualResultDialog(getApplicationContext(), token);
 
-        // Flash notification alert
         updateNotification("Received Emergency Visual Token!", 100);
         new android.os.Handler(getMainLooper()).postDelayed(() -> {
             updateNotification("Listening and modulating data over voice call stream", 0);
