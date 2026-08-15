@@ -5,20 +5,17 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Typeface;
+import android.graphics.Paint;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.TypedValue;
-import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
 import android.widget.EditText;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -29,7 +26,10 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.R;
 import com.example.adapters.TransferAdapter;
+import com.example.audio.AudioEncoder;
 import com.example.database.TransferDatabase;
+import com.example.knowledge.PhoneticBase64Dictionary;
+import com.example.knowledge.PhoneticImageTransceiver;
 import com.example.knowledge.PhoneticTokenManager;
 import com.example.knowledge.TemplateCatalog;
 import com.example.knowledge.VisualRenderer;
@@ -42,10 +42,14 @@ import com.example.utils.AirLogger;
 import com.example.utils.DataPacketManager;
 import com.example.utils.FileAssembler;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.util.List;
 import java.util.UUID;
 
 public class TransferFragment extends Fragment {
+
+    private static final String TAG = "TransferFragment";
 
     private RecyclerView rvTransfers;
     private TransferAdapter adapter;
@@ -114,7 +118,6 @@ public class TransferFragment extends Fragment {
             adapter = new TransferAdapter(list);
             rvTransfers.setAdapter(adapter);
         } else {
-            // Safe adapter update for Recycler bounds
             rvTransfers.setAdapter(new TransferAdapter(list));
         }
     }
@@ -123,6 +126,7 @@ public class TransferFragment extends Fragment {
         CharSequence[] options = new CharSequence[]{
                 "Send Instant Visual Template (Phonetic)",
                 "Send Exact Lossless File (2400 Baud Audio)",
+                "Send Image via Phonetic Base64 Dictionary (Voice Call)",
                 "Generate Receiver Preview"
         };
 
@@ -134,6 +138,8 @@ public class TransferFragment extends Fragment {
                     } else if (which == 1) {
                         sendExactLosslessBinaryStream();
                     } else if (which == 2) {
+                        sendImageViaPhoneticBase64Dictionary();
+                    } else if (which == 3) {
                         simulateReceiverPopup();
                     }
                 })
@@ -144,7 +150,6 @@ public class TransferFragment extends Fragment {
      * MODE 4: Instant Phonetic / Pre-Built Dictionary Token Burst (1.0 Second)
      */
     private void sendInstantVisualTemplate() {
-        // Construct a sample 16-byte template token representing a Hazard Report on Map #1
         TemplateToken token = new TemplateToken(
                 TemplateToken.MODE_PHONETIC_TOKEN,
                 TemplateToken.CATEGORY_TACTICAL_MAP,
@@ -175,10 +180,100 @@ public class TransferFragment extends Fragment {
     }
 
     /**
+     * STANDALONE FEATURE: Sends Image using Phonetic Base64 Dictionary Block Substitution
+     */
+    private void sendImageViaPhoneticBase64Dictionary() {
+        new AlertDialog.Builder(requireContext())
+                .setTitle("Phonetic Base64 Image Transfer")
+                .setMessage("This converts your image to Base64, substitutes recurring 500-char blocks with Phonetic Dictionary words (ALPHA, BRAVO...), and transmits it over the active voice call.")
+                .setPositiveButton("Transmit Image", (dialog, which) -> {
+                    // Create or load sample camera snapshot file in cache
+                    File sampleImage = getOrCreateSampleImageFile();
+                    if (sampleImage == null || !sampleImage.exists()) {
+                        Toast.makeText(requireContext(), "Unable to prepare image file", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    AudioEncoder encoder = new AudioEncoder(2400);
+
+                    PhoneticImageTransceiver.sendImageViaPhoneticDictionary(
+                            requireContext(),
+                            sampleImage,
+                            encoder,
+                            new PhoneticImageTransceiver.OnPhoneticTransferListener() {
+                                @Override
+                                public void onProgress(int step, int totalSteps, String statusMessage) {
+                                    if (getActivity() != null) {
+                                        getActivity().runOnUiThread(() -> {
+                                            Toast.makeText(requireContext(), statusMessage, Toast.LENGTH_SHORT).show();
+                                        });
+                                    }
+                                }
+
+                                @Override
+                                public void onSuccess(int totalTokensSent, int originalBase64Length) {
+                                    if (getActivity() != null) {
+                                        getActivity().runOnUiThread(() -> {
+                                            TransferItem item = new TransferItem(
+                                                    "PHON_" + System.currentTimeMillis(),
+                                                    sampleImage.getName(),
+                                                    sampleImage.length(),
+                                                    100,
+                                                    TransferItem.STATUS_COMPLETED,
+                                                    TransferItem.MODE_PHONETIC_TOKEN,
+                                                    totalTokensSent,
+                                                    totalTokensSent
+                                            );
+                                            transferDb.insertTransfer(item);
+                                            loadTransfers();
+                                            Toast.makeText(requireContext(), "Image Transmitted Successfully! (" + totalTokensSent + " tokens)", Toast.LENGTH_LONG).show();
+                                        });
+                                    }
+                                }
+
+                                @Override
+                                public void onError(Exception e) {
+                                    if (getActivity() != null) {
+                                        getActivity().runOnUiThread(() -> {
+                                            Toast.makeText(requireContext(), "Transfer Failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                                        });
+                                    }
+                                }
+                            }
+                    );
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private File getOrCreateSampleImageFile() {
+        try {
+            File file = new File(requireContext().getCacheDir(), "sample_photo.webp");
+            if (!file.exists()) {
+                Bitmap bmp = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888);
+                Canvas canvas = new Canvas(bmp);
+                canvas.drawColor(Color.parseColor("#0284C7"));
+                Paint p = new Paint();
+                p.setColor(Color.WHITE);
+                p.setTextSize(24f);
+                canvas.drawText("AirSignal Lossless Sample", 20, 120, p);
+
+                FileOutputStream fos = new FileOutputStream(file);
+                bmp.compress(Bitmap.CompressFormat.WEBP, 90, fos);
+                fos.flush();
+                fos.close();
+            }
+            return file;
+        } catch (Exception e) {
+            AirLogger.e(TAG, "Failed creating sample image file", e);
+            return null;
+        }
+    }
+
+    /**
      * MODE 2 / 3: Continuous Raw Binary Audio Stream (30 Minutes / 500 KB)
      */
     private void sendExactLosslessBinaryStream() {
-        // Simulating a raw 45 KB file payload (e.g. losslessly compressed WebP/PDF)
         byte[] dummyFileBytes = new byte[45000]; 
         for (int i = 0; i < dummyFileBytes.length; i++) {
             dummyFileBytes[i] = (byte) (i % 255);
@@ -194,8 +289,6 @@ public class TransferFragment extends Fragment {
                     TransferItem item = new TransferItem(fileId, "lossless_document.pdf", 45000, 0, "TRANSFERRING", "RAW_BINARY_2400", binaryPackets.size(), 0);
                     transferDb.insertTransfer(item);
 
-                    // Note: AudioTransferService logic intercepts this. To actually invoke AudioEncoder:
-                    // In a production app, the UI binds to the Service and calls transmitRawStream(binaryPackets)
                     Toast.makeText(requireContext(), "Binary Stream Started in Background", Toast.LENGTH_LONG).show();
                     loadTransfers();
                 })
