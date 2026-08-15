@@ -11,18 +11,18 @@ import com.example.utils.AirLogger;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AudioReceiver {
 
     private static final String TAG = "AudioReceiver";
 
-    public static final int SAMPLE_RATE = 44100;
+    public static final int DEFAULT_SAMPLE_RATE = 44100;
     public static final byte SYNC_PREAMBLE = (byte) 0xAA;
     public static final byte START_FRAME_DELIMITER = (byte) 0x7E;
 
     private int baudRate = 1200; // 300, 600, 1200, 2400
+    private int activeSampleRate = DEFAULT_SAMPLE_RATE;
     private final AtomicBoolean isListening = new AtomicBoolean(false);
     private AudioRecord audioRecord;
     private AudioReceiverListener listener;
@@ -71,6 +71,10 @@ public class AudioReceiver {
         return baudRate;
     }
 
+    public int getActiveSampleRate() {
+        return activeSampleRate;
+    }
+
     public boolean isListening() {
         return isListening.get();
     }
@@ -79,44 +83,84 @@ public class AudioReceiver {
     public void startListening() {
         if (isListening.get()) return;
 
-        int minBufferSize = AudioRecord.getMinBufferSize(
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
-        );
+        // Hardware Compatibility Probe Matrix
+        int[] sampleRates = new int[]{44100, 48000, 16000, 8000};
+        int[] audioSources = new int[]{
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.DEFAULT
+        };
 
-        int bufferSize = Math.max(minBufferSize * 4, 8192);
+        boolean initialized = false;
+
+        for (int source : audioSources) {
+            for (int rate : sampleRates) {
+                try {
+                    int minBufferSize = AudioRecord.getMinBufferSize(
+                            rate,
+                            AudioFormat.CHANNEL_IN_MONO,
+                            AudioFormat.ENCODING_PCM_16BIT
+                    );
+
+                    if (minBufferSize == AudioRecord.ERROR || minBufferSize == AudioRecord.ERROR_BAD_VALUE) {
+                        continue;
+                    }
+
+                    int bufferSize = Math.max(minBufferSize * 4, 8192);
+
+                    audioRecord = new AudioRecord(
+                            source,
+                            rate,
+                            AudioFormat.CHANNEL_IN_MONO,
+                            AudioFormat.ENCODING_PCM_16BIT,
+                            bufferSize
+                    );
+
+                    if (audioRecord.getState() == AudioRecord.STATE_INITIALIZED) {
+                        activeSampleRate = rate;
+                        initialized = true;
+                        AirLogger.i(TAG, "AudioRecord successfully initialized with Source=" + sourceToString(source) +
+                                ", SampleRate=" + rate + " Hz, Baud=" + baudRate);
+                        break;
+                    } else {
+                        audioRecord.release();
+                        audioRecord = null;
+                    }
+                } catch (Exception e) {
+                    if (audioRecord != null) {
+                        try {
+                            audioRecord.release();
+                        } catch (Exception ignored) {}
+                        audioRecord = null;
+                    }
+                }
+            }
+            if (initialized) break;
+        }
+
+        if (!initialized || audioRecord == null) {
+            AirLogger.e(TAG, "AudioRecord failed to initialize across all hardware probe configurations.");
+            if (listener != null) {
+                listener.onError(new IllegalStateException("Microphone hardware probe failed across all sample rates."));
+            }
+            return;
+        }
 
         try {
-            audioRecord = new AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    bufferSize
-            );
-
-            if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-                AirLogger.e(TAG, "AudioRecord failed to initialize");
-                if (listener != null) listener.onError(new IllegalStateException("AudioRecord initialization failed"));
-                return;
-            }
-
             isListening.set(true);
             audioRecord.startRecording();
-            AirLogger.i(TAG, "AudioReceiver started listening on VOICE_COMMUNICATION at " + baudRate + " Baud");
-
+            AirLogger.i(TAG, "AudioReceiver recording started actively.");
             new Thread(this::listenLoop).start();
         } catch (Exception e) {
-            AirLogger.e(TAG, "Failed starting AudioReceiver", e);
+            AirLogger.e(TAG, "Failed starting AudioRecord stream", e);
             if (listener != null) listener.onError(e);
             stopListening();
         }
     }
 
     private void listenLoop() {
-        double samplesPerBit = (double) SAMPLE_RATE / (double) baudRate;
-        int bitSampleLen = (int) Math.round(samplesPerBit);
+        double samplesPerBit = (double) activeSampleRate / (double) baudRate;
+        int bitSampleLen = Math.max((int) Math.round(samplesPerBit), 1);
         short[] bitBuffer = new short[bitSampleLen];
 
         int currentByteAccumulator = 0;
@@ -133,10 +177,10 @@ public class AudioReceiver {
 
             int read = audioRecord.read(bitBuffer, 0, bitBuffer.length);
             if (read > 0) {
-                int bitVal = AudioDecoder.detectBit(bitBuffer, 0, read, SAMPLE_RATE);
+                int bitVal = AudioDecoder.detectBit(bitBuffer, 0, read, activeSampleRate);
 
                 if (bitVal == -1) {
-                    // Silence or room noise
+                    // Ambient silence or voice chatter — skip
                     continue;
                 }
 
@@ -219,5 +263,14 @@ public class AudioReceiver {
             }
         }
         AirLogger.i(TAG, "AudioReceiver stopped listening");
+    }
+
+    private String sourceToString(int source) {
+        switch (source) {
+            case MediaRecorder.AudioSource.VOICE_COMMUNICATION: return "VOICE_COMMUNICATION";
+            case MediaRecorder.AudioSource.MIC: return "MIC";
+            case MediaRecorder.AudioSource.DEFAULT: return "DEFAULT";
+            default: return "SOURCE_" + source;
+        }
     }
 }
