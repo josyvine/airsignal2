@@ -1,17 +1,20 @@
 package com.example.services;
 
+import android.Manifest;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
 
 import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 
 import com.example.audio.AudioEncoder;
 import com.example.audio.AudioReceiver;
@@ -32,10 +35,12 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
 
     public static final String ACTION_SEND_TOKEN = "com.example.ACTION_SEND_TOKEN";
     public static final String ACTION_SEND_PHONETIC_IMAGE = "com.example.ACTION_SEND_PHONETIC_IMAGE";
+    public static final String ACTION_SEND_RAW_BINARY = "com.example.ACTION_SEND_RAW_BINARY";
     public static final String ACTION_STOP_SERVICE = "com.example.ACTION_STOP_SERVICE";
     
     public static final String EXTRA_TOKEN_PAYLOAD = "extra_token_payload";
     public static final String EXTRA_IMAGE_PATH = "extra_image_path";
+    public static final String EXTRA_BINARY_FILE_PATH = "extra_binary_file_path";
 
     private AudioReceiver audioReceiver;
     private AudioEncoder audioEncoder;
@@ -159,8 +164,13 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
             }
         }
 
-        // Start background microphone Goertzel decoding loop
-        audioReceiver.startListening();
+        // Verify runtime RECORD_AUDIO permission before engaging AudioReceiver
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            audioReceiver.startListening();
+        } else {
+            AirLogger.w(TAG, "RECORD_AUDIO permission not yet granted. AudioReceiver standby.");
+            updateNotification("Awaiting Microphone Permission...", 0);
+        }
 
         return START_STICKY;
     }
