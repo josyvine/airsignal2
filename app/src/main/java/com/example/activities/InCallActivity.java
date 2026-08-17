@@ -288,10 +288,10 @@ public class InCallActivity extends AppCompatActivity {
                     startCallTimer();
                     AirLogger.i(TAG, "Call state ACTIVE - started call duration timer");
 
-                    // Prompt transmitter to initiate transmission once answered
+                    // Set up handshake awaiting status with manual tap override
                     if (tvRecordingBadge != null && !isRecording) {
                         tvRecordingBadge.setVisibility(View.VISIBLE);
-                        tvRecordingBadge.setText("⚡ TAP TO TRANSMIT DATA NOW");
+                        tvRecordingBadge.setText("⚡ AWAITING RECEIVER HANDSHAKE...");
                         tvRecordingBadge.setOnClickListener(v -> {
                             Intent triggerIntent = new Intent(InCallActivity.this, AudioTransferService.class);
                             triggerIntent.setAction(AudioTransferService.ACTION_EXECUTE_STAGED_TRANSMISSION);
