@@ -2,7 +2,9 @@ package com.example.utils;
 
 import android.content.Context;
 import android.content.Intent;
+import android.os.Environment;
 import android.util.Base64;
+
 import com.example.database.TransferDatabase;
 import com.example.models.DataPacket;
 import com.example.models.TransferItem;
@@ -11,6 +13,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -20,49 +23,86 @@ public class FileAssembler {
 
     private static final String TAG = "FileAssembler";
     public static final String ACTION_TRANSFER_PROGRESS = "com.example.ACTION_TRANSFER_PROGRESS";
+    public static final String EXTRA_FILE_ID = "fileId";
+    public static final String EXTRA_FILE_PATH = "filePath";
+    public static final String EXTRA_STATUS = "status";
+
+    /**
+     * Returns the standardized public folder for all completed AirSignal transfers.
+     */
+    public static File getReceivedFilesDir(Context context) {
+        File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        File transfersDir = new File(downloadsDir, "AirSignal_Transfers");
+
+        if (!transfersDir.exists()) {
+            boolean created = transfersDir.mkdirs();
+            if (!created) {
+                // Fallback to internal app files directory if external permission/creation is restricted
+                if (context != null) {
+                    transfersDir = new File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "AirSignal_Transfers");
+                    if (!transfersDir.exists()) {
+                        transfersDir.mkdirs();
+                    }
+                }
+            }
+        }
+        return transfersDir;
+    }
 
     /**
      * Entry point for incoming raw binary audio frames from AudioTransferService.
-     * Parses the packet, commits it to TransferDatabase, and checks if assembly is complete.
+     * Performs boundary alignment, parses packet headers, commits to TransferDatabase, and triggers assembly upon completion.
      */
     public static void processIncomingBinaryFrame(Context context, byte[] rawFrame) {
-        if (context == null || rawFrame == null) return;
+        if (context == null || rawFrame == null || rawFrame.length == 0) return;
 
-        DataPacket packet = DataPacketManager.parseBinaryPacket(rawFrame);
+        // 1. Scan for Magic Byte boundary (0x53) to align framed packets
+        DataPacket packet = null;
+        for (int offset = 0; offset <= rawFrame.length - 7; offset++) {
+            if (rawFrame[offset] == 0x53) { // Magic byte 'S'
+                byte[] candidateSlice = Arrays.copyOfRange(rawFrame, offset, rawFrame.length);
+                packet = DataPacketManager.parseBinaryPacket(candidateSlice);
+                if (packet != null) {
+                    break;
+                }
+            }
+        }
+
         if (packet == null) {
-            AirLogger.w(TAG, "Failed to parse incoming acoustic binary frame.");
+            AirLogger.w(TAG, "Failed to parse incoming acoustic binary frame (" + rawFrame.length + " bytes).");
             return;
         }
 
         TransferDatabase db = TransferDatabase.getInstance(context);
 
-        // Ensure transfer metadata exists in tracking table
+        // 2. Ensure transfer metadata exists in tracking table
         TransferItem transfer = db.getTransfer(packet.getFileId());
         if (transfer == null) {
-            String filename = "audio_rx_" + System.currentTimeMillis() + ".bin";
+            String filename = "rx_file_" + System.currentTimeMillis() + ".dat";
             transfer = new TransferItem(
                     packet.getFileId(),
                     filename,
                     0,
                     0,
                     "RECEIVING",
-                    "AUDIO_DATA",
+                    "RAW_BINARY_2400",
                     packet.getTotalPackets(),
                     0
             );
             db.insertTransfer(transfer);
         }
 
-        // Insert packet and verify completion
+        // 3. Insert packet and verify if entire transfer is complete
         boolean isComplete = db.insertPacketAndUpdateProgress(packet);
 
-        // Broadcast progress to UI (TransferFragment)
+        // 4. Broadcast progress to UI (TransferFragment / InCallActivity)
         Intent progressIntent = new Intent(ACTION_TRANSFER_PROGRESS);
-        progressIntent.putExtra("fileId", packet.getFileId());
+        progressIntent.putExtra(EXTRA_FILE_ID, packet.getFileId());
+        progressIntent.putExtra(EXTRA_STATUS, isComplete ? "COMPLETED" : "RECEIVING");
         context.sendBroadcast(progressIntent);
 
         if (isComplete) {
-            AirLogger.i(TAG, "All packets received for fileId=" + packet.getFileId() + ". Starting assembly.");
+            AirLogger.i(TAG, "All packets received for fileId=" + packet.getFileId() + ". Starting file assembly.");
             db.updateTransferStatus(packet.getFileId(), "ASSEMBLING");
 
             List<DataPacket> allPackets = db.getAllPackets(packet.getFileId());
@@ -71,6 +111,12 @@ public class FileAssembler {
             if (assembledFile != null && assembledFile.exists()) {
                 db.updateTransferStatus(packet.getFileId(), "COMPLETED");
                 AirLogger.i(TAG, "File successfully assembled: " + assembledFile.getAbsolutePath());
+
+                Intent completeBroadcast = new Intent(ACTION_TRANSFER_PROGRESS);
+                completeBroadcast.putExtra(EXTRA_FILE_ID, packet.getFileId());
+                completeBroadcast.putExtra(EXTRA_FILE_PATH, assembledFile.getAbsolutePath());
+                completeBroadcast.putExtra(EXTRA_STATUS, "COMPLETED");
+                context.sendBroadcast(completeBroadcast);
             } else {
                 db.updateTransferStatus(packet.getFileId(), "FAILED");
                 AirLogger.e(TAG, "File assembly failed for fileId=" + packet.getFileId(), null);
@@ -84,6 +130,11 @@ public class FileAssembler {
      */
     public static File assembleFile(Context context, String filename, List<DataPacket> packets) {
         try {
+            if (packets == null || packets.isEmpty()) {
+                AirLogger.e(TAG, "assembleFile called with empty packet list", null);
+                return null;
+            }
+
             // 1. Sort packets sequentially by index
             Collections.sort(packets, new Comparator<DataPacket>() {
                 @Override
@@ -104,13 +155,10 @@ public class FileAssembler {
             // 4. Automatically decompress if GZIP was applied by the sender
             byte[] decompressedBytes = decompressGzipIfNeeded(decodedBytes);
 
-            // 5. Determine output directory
-            File outputDir = context.getExternalFilesDir(null);
-            if (outputDir == null) {
-                outputDir = context.getFilesDir();
-            }
+            // 5. Determine public output directory (Downloads/AirSignal_Transfers/)
+            File outputDir = getReceivedFilesDir(context);
 
-            // 6. Write final file to internal storage
+            // 6. Write final file to storage
             File outFile = new File(outputDir, filename);
             FileOutputStream fos = new FileOutputStream(outFile);
             fos.write(decompressedBytes);
@@ -146,7 +194,7 @@ public class FileAssembler {
 
                 gzis.close();
                 bais.close();
-                AirLogger.i(TAG, "GZIP stream decompressed successfully. Original size: " + data.length + ", Restored size: " + baos.size());
+                AirLogger.i(TAG, "GZIP stream decompressed successfully. Compressed size: " + data.length + ", Restored size: " + baos.size());
                 return baos.toByteArray();
             } catch (Exception e) {
                 AirLogger.w(TAG, "GZIP magic number detected, but decompression failed. Returning raw bytes.");
