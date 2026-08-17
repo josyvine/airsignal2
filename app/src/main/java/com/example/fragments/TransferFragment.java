@@ -6,7 +6,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.database.Cursor;
-import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -326,8 +325,8 @@ public class TransferFragment extends Fragment {
                         requireContext().startService(serviceIntent);
                         Toast.makeText(requireContext(), "Streaming Token into Active Call...", Toast.LENGTH_SHORT).show();
                     } else {
-                        // Prompt for phone number and place real cellular call
-                        promptPhoneNumberAndPlaceCall(customToken.toByteArray(), null);
+                        // Prompt for phone number, stage payload, and place real cellular call
+                        promptPhoneNumberAndPlaceCall(customToken.toByteArray(), null, null);
                     }
                 })
                 .setNegativeButton("Cancel", null)
@@ -359,15 +358,20 @@ public class TransferFragment extends Fragment {
                 .setMessage("File: " + selectedFileName + "\nSize: " + (selectedFileSize / 1024) + " KB\nTotal Audio Packets: " + binaryPackets.size() +
                         "\nEst. Transfer Time: ~" + String.format("%.1f", estMinutes) + " min @ 2400 Baud")
                 .setPositiveButton("Dial Call & Start Stream", (dialog, which) -> {
-                    TransferItem item = new TransferItem(fileId, selectedFileName, selectedFileSize, 0, "TRANSFERRING", "RAW_BINARY_2400", binaryPackets.size(), 0);
+                    TransferItem item = new TransferItem(fileId, selectedFileName, selectedFileSize, 0, "QUEUED", "RAW_BINARY_2400", binaryPackets.size(), 0);
                     transferDb.insertTransfer(item);
 
                     if (AirSignalInCallService.getActiveCall() != null) {
                         Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
+                        serviceIntent.setAction(AudioTransferService.ACTION_SEND_BINARY_FILE);
+                        serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_PATH, localCachedFile.getAbsolutePath());
+                        serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_NAME, selectedFileName);
+                        serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_SIZE, selectedFileSize);
+                        serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_ID, fileId);
                         requireContext().startService(serviceIntent);
                         Toast.makeText(requireContext(), "Streaming into Active Call...", Toast.LENGTH_SHORT).show();
                     } else {
-                        promptPhoneNumberAndPlaceCall(null, null);
+                        promptPhoneNumberAndPlaceCall(null, null, localCachedFile);
                     }
                     loadTransfers();
                 })
@@ -387,7 +391,7 @@ public class TransferFragment extends Fragment {
 
         new AlertDialog.Builder(requireContext())
                 .setTitle("Phonetic Base64 Image Transfer")
-                .setMessage("File: " + selectedFileName + "\nThis encodes your image, substitutes 500-char blocks using Phonetic Dictionary words (ALPHA, BRAVO...), and transmits it over the active voice call.")
+                .setMessage("File: " + selectedFileName + "\nThis encodes your image, substitutes 500-char blocks using Phonetic Dictionary words (ALPHA, BRAVO...), and transmits it over the active voice call once answered.")
                 .setPositiveButton("Transmit over Call", (dialog, which) -> {
                     if (AirSignalInCallService.getActiveCall() != null) {
                         AudioEncoder encoder = new AudioEncoder(2400);
@@ -433,27 +437,27 @@ public class TransferFragment extends Fragment {
                                 }
                         );
                     } else {
-                        // Prompt for phone number and place real cellular call
-                        promptPhoneNumberAndPlaceCall(null, localCachedFile);
+                        // Prompt for phone number, stage the image payload, and place real cellular call
+                        promptPhoneNumberAndPlaceCall(null, localCachedFile, null);
                     }
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
-    private void promptPhoneNumberAndPlaceCall(final byte[] tokenPayload, final File imageToTransmit) {
+    private void promptPhoneNumberAndPlaceCall(final byte[] tokenPayload, final File imageToTransmit, final File rawFileToTransmit) {
         final EditText etPhone = new EditText(requireContext());
         etPhone.setHint("Enter Target Phone Number to Call");
         etPhone.setPadding(32, 32, 32, 32);
 
         new AlertDialog.Builder(requireContext())
                 .setTitle("Dial Audio Data Call")
-                .setMessage("Enter the recipient's phone number. AirSignal will place the cellular voice call and stream the data once answered.")
+                .setMessage("Enter the recipient's phone number. AirSignal will place the cellular voice call and stream the data automatically once answered.")
                 .setView(etPhone)
                 .setPositiveButton("Call & Transmit", (dialog, which) -> {
                     String phone = etPhone.getText().toString().trim();
                     if (!phone.isEmpty()) {
-                        // 1. Start audio transfer service
+                        // 1. Stage the payload into AudioTransferService (Service holds payload until STATE_ACTIVE)
                         Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
                         if (tokenPayload != null) {
                             serviceIntent.setAction(AudioTransferService.ACTION_SEND_TOKEN);
@@ -461,12 +465,19 @@ public class TransferFragment extends Fragment {
                         } else if (imageToTransmit != null) {
                             serviceIntent.setAction(AudioTransferService.ACTION_SEND_PHONETIC_IMAGE);
                             serviceIntent.putExtra(AudioTransferService.EXTRA_IMAGE_PATH, imageToTransmit.getAbsolutePath());
+                            serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_NAME, selectedFileName);
+                            serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_SIZE, selectedFileSize);
+                        } else if (rawFileToTransmit != null) {
+                            serviceIntent.setAction(AudioTransferService.ACTION_SEND_BINARY_FILE);
+                            serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_PATH, rawFileToTransmit.getAbsolutePath());
+                            serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_NAME, selectedFileName);
+                            serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_SIZE, selectedFileSize);
                         }
                         requireContext().startService(serviceIntent);
 
                         // 2. DIAL THE REAL CELLULAR CALL
                         CallManager.placeCall(requireContext(), phone);
-                        Toast.makeText(requireContext(), "Dialing cellular call to " + phone + "...", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(requireContext(), "Dialing " + phone + ". Transmission will begin when answered.", Toast.LENGTH_LONG).show();
                     } else {
                         Toast.makeText(requireContext(), "Please enter a valid phone number", Toast.LENGTH_SHORT).show();
                     }
@@ -553,17 +564,24 @@ public class TransferFragment extends Fragment {
             String phone = etPhone.getText().toString().trim();
             if (!phone.isEmpty()) {
                 String fileId = "SYS_AUD_" + System.currentTimeMillis();
-                TransferItem item = new TransferItem(fileId, selectedFileName.equals("None") ? "stream_audio_data.bin" : selectedFileName, selectedFileSize > 0 ? selectedFileSize : 8192, 10, "TRANSFERRING", "AUDIO_DATA", 16, 2);
+                TransferItem item = new TransferItem(fileId, selectedFileName.equals("None") ? "stream_audio_data.bin" : selectedFileName, selectedFileSize > 0 ? selectedFileSize : 8192, 0, "QUEUED", "AUDIO_DATA", 16, 0);
                 transferDb.insertTransfer(item);
 
-                // 1. Start audio transfer service
+                // 1. Stage the audio transfer request into AudioTransferService
                 Intent serviceIntent = new Intent(requireContext(), AudioTransferService.class);
+                serviceIntent.setAction(AudioTransferService.ACTION_SEND_AUDIO_DATA);
+                if (localCachedFile != null && localCachedFile.exists()) {
+                    serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_PATH, localCachedFile.getAbsolutePath());
+                }
+                serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_NAME, selectedFileName);
+                serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_SIZE, selectedFileSize);
+                serviceIntent.putExtra(AudioTransferService.EXTRA_FILE_ID, fileId);
                 requireContext().startService(serviceIntent);
 
                 // 2. ACTUALLY DIAL THE REAL CELLULAR CALL
                 CallManager.placeCall(requireContext(), phone);
 
-                Toast.makeText(requireContext(), "Dialing Audio Call to " + phone + "...", Toast.LENGTH_SHORT).show();
+                Toast.makeText(requireContext(), "Dialing " + phone + ". Audio stream will start when answered.", Toast.LENGTH_LONG).show();
                 dialog.dismiss();
                 loadTransfers();
             }
