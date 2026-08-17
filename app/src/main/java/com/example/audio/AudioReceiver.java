@@ -21,6 +21,9 @@ public class AudioReceiver {
     public static final byte SYNC_PREAMBLE = (byte) 0xAA;
     public static final byte START_FRAME_DELIMITER = (byte) 0x7E;
 
+    // Standardized handshake command string to awaken and lock the remote receiver into Receiver Mode
+    public static final String CMD_ACTIVATE_RECEIVER = "AIR_CMD:ACTIVATE_RECEIVER";
+
     private int baudRate = 1200; // 300, 600, 1200, 2400
     private int activeSampleRate = DEFAULT_SAMPLE_RATE;
     private final AtomicBoolean isListening = new AtomicBoolean(false);
@@ -31,6 +34,7 @@ public class AudioReceiver {
         void onByteDecoded(byte b);
         void onFrameDecoded(byte[] frameData);
         void onTokenDecoded(TemplateToken token);
+        void onReceiverActivationCommand();
         void onError(Exception e);
     }
 
@@ -51,6 +55,9 @@ public class AudioReceiver {
 
             @Override
             public void onTokenDecoded(TemplateToken token) {}
+
+            @Override
+            public void onReceiverActivationCommand() {}
 
             @Override
             public void onError(Exception e) {}
@@ -205,7 +212,21 @@ public class AudioReceiver {
                     } else {
                         frameBuffer.write(completedByte);
 
-                        // 1. Mode 4 Check: If 16 bytes accumulated, attempt TemplateToken validation
+                        byte[] currentBufferBytes = frameBuffer.toByteArray();
+                        String preview = new String(currentBufferBytes, StandardCharsets.UTF_8);
+
+                        // 1. Check for remote ACTIVATE_RECEIVER acoustic handshake command
+                        if (preview.contains(CMD_ACTIVATE_RECEIVER)) {
+                            AirLogger.i(TAG, "Remote ACTIVATE_RECEIVER command detected over voice call!");
+                            if (listener != null) {
+                                listener.onReceiverActivationCommand();
+                            }
+                            isLockedOnPreamble = false;
+                            frameBuffer.reset();
+                            continue;
+                        }
+
+                        // 2. Mode 4 Check: If 16 bytes accumulated, attempt TemplateToken validation
                         if (frameBuffer.size() == TemplateToken.TOKEN_BYTE_SIZE) {
                             byte[] candidateBytes = frameBuffer.toByteArray();
                             TemplateToken token = TemplateToken.fromByteArray(candidateBytes);
@@ -217,20 +238,22 @@ public class AudioReceiver {
                                 }
                                 isLockedOnPreamble = false;
                                 frameBuffer.reset();
+                                continue;
                             }
-                        } 
-                        
-                        // 2. Phonetic Image Preamble Check
-                        byte[] currentBufferBytes = frameBuffer.toByteArray();
-                        String preview = new String(currentBufferBytes, StandardCharsets.UTF_8);
+                        }
+
+                        // 3. Phonetic Image Preamble Check
                         if (preview.contains(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE) && currentBufferBytes.length > 256) {
                             if (listener != null) {
                                 listener.onFrameDecoded(currentBufferBytes);
                             }
                             isLockedOnPreamble = false;
                             frameBuffer.reset();
-                        } else if (frameBuffer.size() > 512) {
-                            // Mode 2/3 Raw Packet Frame flush
+                            continue;
+                        }
+
+                        // 4. Mode 2/3 Raw Binary Packet Frame flush (263-byte packet or 512-byte flush)
+                        if (frameBuffer.size() >= 263) {
                             if (listener != null) {
                                 listener.onFrameDecoded(currentBufferBytes);
                             }
