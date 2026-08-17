@@ -3,9 +3,11 @@ package com.example.activities;
 import android.Manifest;
 import android.app.AlertDialog;
 import android.app.KeyguardManager;
+import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.media.AudioManager;
@@ -42,6 +44,7 @@ import com.example.models.TemplateToken;
 import com.example.services.AirSignalInCallService;
 import com.example.services.AudioTransferService;
 import com.example.utils.AirLogger;
+import com.example.utils.FileAssembler;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
 import java.io.File;
@@ -99,6 +102,29 @@ public class InCallActivity extends AppCompatActivity {
     private String recordFilePath;
 
     private ActivityResultLauncher<String> inCallFilePickerLauncher;
+
+    // Real-time broadcast receiver for in-call data reception & activation events
+    private final BroadcastReceiver inCallDataReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null) return;
+            String action = intent.getAction();
+
+            if (AudioTransferService.ACTION_RECEIVER_MODE_ACTIVE.equals(action)) {
+                AirLogger.i(TAG, "InCallActivity received ACTION_RECEIVER_MODE_ACTIVE broadcast");
+                runOnUiThread(() -> {
+                    tvRecordingBadge.setVisibility(View.VISIBLE);
+                    tvRecordingBadge.setText("⚡ RECEIVING IN-CALL DATA...");
+                    Toast.makeText(InCallActivity.this, "Receiver Mode Active: In-Call Data Transfer Started", Toast.LENGTH_SHORT).show();
+                });
+            } else if (FileAssembler.ACTION_TRANSFER_PROGRESS.equals(action)) {
+                runOnUiThread(() -> {
+                    tvRecordingBadge.setVisibility(View.VISIBLE);
+                    tvRecordingBadge.setText("⚡ DATA STREAM IN PROGRESS");
+                });
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -175,6 +201,16 @@ public class InCallActivity extends AppCompatActivity {
         lookupContactName();
 
         setupControls();
+
+        // Register in-call receiver mode & progress filters
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(AudioTransferService.ACTION_RECEIVER_MODE_ACTIVE);
+        filter.addAction(FileAssembler.ACTION_TRANSFER_PROGRESS);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(inCallDataReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(inCallDataReceiver, filter);
+        }
 
         android.telecom.Call activeCall = AirSignalInCallService.getActiveCall();
         if (activeCall != null) {
@@ -512,31 +548,14 @@ public class InCallActivity extends AppCompatActivity {
             fos.close();
             is.close();
 
-            AudioEncoder encoder = new AudioEncoder(2400);
+            Intent intent = new Intent(this, AudioTransferService.class);
+            intent.setAction(AudioTransferService.ACTION_SEND_PHONETIC_IMAGE);
+            intent.putExtra(AudioTransferService.EXTRA_IMAGE_PATH, tempFile.getAbsolutePath());
+            intent.putExtra(AudioTransferService.EXTRA_FILE_NAME, "incall_photo.webp");
+            intent.putExtra(AudioTransferService.EXTRA_FILE_SIZE, tempFile.length());
+            startService(intent);
 
             Toast.makeText(this, "Transmitting Photo over call stream...", Toast.LENGTH_SHORT).show();
-
-            PhoneticImageTransceiver.sendImageViaPhoneticDictionary(
-                    this,
-                    tempFile,
-                    encoder,
-                    new PhoneticImageTransceiver.OnPhoneticTransferListener() {
-                        @Override
-                        public void onProgress(int step, int totalSteps, String statusMessage) {
-                            runOnUiThread(() -> Toast.makeText(InCallActivity.this, statusMessage, Toast.LENGTH_SHORT).show());
-                        }
-
-                        @Override
-                        public void onSuccess(int totalTokensSent, int originalBase64Length) {
-                            runOnUiThread(() -> Toast.makeText(InCallActivity.this, "Photo Transmitted Successfully over Call!", Toast.LENGTH_LONG).show());
-                        }
-
-                        @Override
-                        public void onError(Exception e) {
-                            runOnUiThread(() -> Toast.makeText(InCallActivity.this, "In-Call Transfer Error: " + e.getMessage(), Toast.LENGTH_SHORT).show());
-                        }
-                    }
-            );
 
         } catch (Exception e) {
             AirLogger.e(TAG, "Failed reading in-call picked image", e);
@@ -677,6 +696,10 @@ public class InCallActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        try {
+            unregisterReceiver(inCallDataReceiver);
+        } catch (Exception ignored) {
+        }
         if (callTimerRunnable != null) {
             handler.removeCallbacks(callTimerRunnable);
         }
