@@ -49,6 +49,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
     public static final String ACTION_SEND_BINARY_FILE = "com.example.ACTION_SEND_BINARY_FILE";
     public static final String ACTION_SEND_AUDIO_DATA = "com.example.ACTION_SEND_AUDIO_DATA";
     public static final String ACTION_CALL_ACTIVE = "com.example.ACTION_CALL_ACTIVE";
+    public static final String ACTION_EXECUTE_STAGED_TRANSMISSION = "com.example.ACTION_EXECUTE_STAGED_TRANSMISSION";
     public static final String ACTION_RECEIVER_MODE_ACTIVE = "com.example.ACTION_RECEIVER_MODE_ACTIVE";
     public static final String ACTION_STOP_SERVICE = "com.example.ACTION_STOP_SERVICE";
 
@@ -132,8 +133,18 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
             return START_NOT_STICKY;
         }
 
-        // Call transitioned to ACTIVE: Trigger listening and release any staged outbound transmissions
+        // Call transitioned to ACTIVE: Engage receiver listening and prepare audio routing
         if (ACTION_CALL_ACTIVE.equals(action)) {
+            ensureAudioRoutingAndListening();
+            if (stagedPayload != null) {
+                updateNotification("Call connected. Tap 'Transmit Data' on screen to start.", 0);
+            }
+            return START_STICKY;
+        }
+
+        // Explicit user trigger from InCallActivity screen
+        if (ACTION_EXECUTE_STAGED_TRANSMISSION.equals(action)) {
+            AirLogger.i(TAG, "User triggered ACTION_EXECUTE_STAGED_TRANSMISSION from in-call screen.");
             ensureAudioRoutingAndListening();
             executeStagedPayloadIfPresent();
             return START_STICKY;
@@ -165,12 +176,12 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
             // Check if call is already connected in ACTIVE state
             Call activeCall = AirSignalInCallService.getActiveCall();
             if (activeCall != null && activeCall.getState() == Call.STATE_ACTIVE) {
-                AirLogger.i(TAG, "Call is ALREADY active. Executing transmission immediately.");
+                AirLogger.i(TAG, "Call is active. Payload staged for in-call execution.");
                 ensureAudioRoutingAndListening();
-                executeStagedPayloadIfPresent();
+                updateNotification("Payload staged. Tap 'Transmit Data' on screen to start.", 0);
             } else {
                 AirLogger.i(TAG, "Call is not yet active (Dialing/Ringing). Payload staged safely.");
-                updateNotification("Payload staged. Waiting for call to connect...", 0);
+                updateNotification("Payload staged. Waiting for recipient to answer...", 0);
             }
             return START_STICKY;
         }
@@ -214,7 +225,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
         final StagedPayload payload = stagedPayload;
         stagedPayload = null; // Clear queue so it is only transmitted once
 
-        // Small 800ms stabilization delay after call connect
+        // Small 800ms stabilization delay
         mainHandler.postDelayed(() -> {
             ensureAudioRoutingAndListening();
             updateNotification("Sending activation command to receiver...", 0);
