@@ -97,6 +97,7 @@ public class InCallActivity extends AppCompatActivity {
     private Handler handler = new Handler(Looper.getMainLooper());
     private Runnable callTimerRunnable;
     private Runnable recordingTimerRunnable;
+    private Runnable badgeDismissRunnable;
 
     private DatabaseHelper dbHelper;
     private String recordFilePath;
@@ -113,14 +114,33 @@ public class InCallActivity extends AppCompatActivity {
             if (AudioTransferService.ACTION_RECEIVER_MODE_ACTIVE.equals(action)) {
                 AirLogger.i(TAG, "InCallActivity received ACTION_RECEIVER_MODE_ACTIVE broadcast");
                 runOnUiThread(() -> {
+                    if (badgeDismissRunnable != null) {
+                        handler.removeCallbacks(badgeDismissRunnable);
+                    }
                     tvRecordingBadge.setVisibility(View.VISIBLE);
                     tvRecordingBadge.setText("⚡ RECEIVING IN-CALL DATA...");
                     Toast.makeText(InCallActivity.this, "Receiver Mode Active: In-Call Data Transfer Started", Toast.LENGTH_SHORT).show();
                 });
             } else if (FileAssembler.ACTION_TRANSFER_PROGRESS.equals(action)) {
+                String status = intent.getStringExtra(FileAssembler.EXTRA_STATUS);
                 runOnUiThread(() -> {
+                    if (badgeDismissRunnable != null) {
+                        handler.removeCallbacks(badgeDismissRunnable);
+                    }
                     tvRecordingBadge.setVisibility(View.VISIBLE);
-                    tvRecordingBadge.setText("⚡ DATA STREAM IN PROGRESS");
+
+                    if ("COMPLETED".equalsIgnoreCase(status)) {
+                        tvRecordingBadge.setText("⚡ TRANSFER COMPLETE (100%)");
+                        // Auto-hide the completion badge after 3 seconds
+                        badgeDismissRunnable = () -> {
+                            if (tvRecordingBadge != null && !isRecording) {
+                                tvRecordingBadge.setVisibility(View.GONE);
+                            }
+                        };
+                        handler.postDelayed(badgeDismissRunnable, 3000);
+                    } else {
+                        tvRecordingBadge.setText("⚡ DATA STREAM IN PROGRESS");
+                    }
                 });
             }
         }
@@ -656,6 +676,9 @@ public class InCallActivity extends AppCompatActivity {
     }
 
     private void endCall() {
+        if (badgeDismissRunnable != null) {
+            handler.removeCallbacks(badgeDismissRunnable);
+        }
         if (callTimerRunnable != null) {
             handler.removeCallbacks(callTimerRunnable);
         }
@@ -699,6 +722,9 @@ public class InCallActivity extends AppCompatActivity {
         try {
             unregisterReceiver(inCallDataReceiver);
         } catch (Exception ignored) {
+        }
+        if (badgeDismissRunnable != null) {
+            handler.removeCallbacks(badgeDismissRunnable);
         }
         if (callTimerRunnable != null) {
             handler.removeCallbacks(callTimerRunnable);
