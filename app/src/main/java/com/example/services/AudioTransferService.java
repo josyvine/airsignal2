@@ -81,6 +81,9 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean isListening = false;
 
+    // Session buffer for accumulating multi-chunk phonetic image transmissions
+    private final ByteArrayOutputStream imageStreamBuffer = new ByteArrayOutputStream();
+
     @Override
     public IBinder onBind(Intent intent) {
         return null;
@@ -129,6 +132,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
 
         if (ACTION_STOP_SERVICE.equals(action)) {
             stagedPayload = null;
+            imageStreamBuffer.reset();
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -518,6 +522,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
         }
 
         stagedPayload = null;
+        imageStreamBuffer.reset();
         super.onDestroy();
     }
 
@@ -552,26 +557,49 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
     public void onFrameDecoded(byte[] frameData) {
         if (frameData == null || frameData.length == 0) return;
 
-        // Check if frame contains the Phonetic Base64 Image signature
         String previewStr = new String(frameData, StandardCharsets.UTF_8);
-        if (previewStr.contains(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE)) {
-            AirLogger.i(TAG, "Detected incoming Phonetic Base64 Image stream!");
-            List<String> tokens = PhoneticImageTransceiver.parseTransmissionToTokens(frameData);
-            PhoneticImageTransceiver.receiveAndReconstructImage(getApplicationContext(), tokens, "received_phonetic_photo.webp");
 
-            updateNotification("Received Phonetic Image!", 100);
+        // 1. Phonetic Base64 Image Session Accumulator
+        if (previewStr.contains(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE) || imageStreamBuffer.size() > 0) {
+            imageStreamBuffer.write(frameData, 0, frameData.length);
+            byte[] currentFullStream = imageStreamBuffer.toByteArray();
+            String fullStreamStr = new String(currentFullStream, StandardCharsets.UTF_8);
 
-            Intent completeBroadcast = new Intent(FileAssembler.ACTION_TRANSFER_PROGRESS);
-            completeBroadcast.putExtra(FileAssembler.EXTRA_STATUS, "COMPLETED");
-            sendBroadcast(completeBroadcast);
+            AirLogger.i(TAG, "Accumulating Phonetic Image stream. Buffer size: " + currentFullStream.length + " bytes.");
 
-            mainHandler.postDelayed(() -> updateNotification("Listening for incoming data...", 0), 3000);
+            // Check if full stream reached completion closure '#' delimiters
+            int firstHash = fullStreamStr.indexOf('#');
+            int lastHash = fullStreamStr.lastIndexOf('#');
+            if (firstHash != -1 && lastHash > firstHash && (fullStreamStr.endsWith("#") || countOccurrences(fullStreamStr, '#') >= 3 || currentFullStream.length > 7000)) {
+                AirLogger.i(TAG, "Complete Phonetic Base64 Image received (" + currentFullStream.length + " bytes)! Reconstructing image.");
+                List<String> tokens = PhoneticImageTransceiver.parseTransmissionToTokens(currentFullStream);
+                PhoneticImageTransceiver.receiveAndReconstructImage(getApplicationContext(), tokens, "received_phonetic_photo.webp");
+
+                imageStreamBuffer.reset();
+
+                updateNotification("Received Phonetic Image!", 100);
+
+                Intent completeBroadcast = new Intent(FileAssembler.ACTION_TRANSFER_PROGRESS);
+                completeBroadcast.putExtra(FileAssembler.EXTRA_STATUS, "COMPLETED");
+                sendBroadcast(completeBroadcast);
+
+                mainHandler.postDelayed(() -> updateNotification("Listening for incoming data...", 0), 3000);
+                return;
+            }
             return;
         }
 
-        // Mode 2/3: Pass exact lossless binary frames to FileAssembler for GZIP decompression
+        // 2. Mode 2/3: Pass exact lossless binary frames to FileAssembler for GZIP decompression
         AirLogger.i(TAG, "Received raw binary frame (" + frameData.length + " bytes). Passing to Assembler.");
         FileAssembler.processIncomingBinaryFrame(getApplicationContext(), frameData);
+    }
+
+    private int countOccurrences(String str, char ch) {
+        int count = 0;
+        for (int i = 0; i < str.length(); i++) {
+            if (str.charAt(i) == ch) count++;
+        }
+        return count;
     }
 
     @Override
