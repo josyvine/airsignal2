@@ -318,7 +318,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
             AirLogger.w(TAG, "Binary file path is null, generating dummy telemetry data stream");
             byte[] dummyData = "AirSignal Telemetry Stream Test Data 2026".getBytes(StandardCharsets.UTF_8);
             List<byte[]> packets = DataPacketManager.createBinaryPackets(dummyData);
-            audioEncoder.streamBinaryDataset(packets, null);
+            audioEncoder.transmitRawStream(packets, null);
             return;
         }
 
@@ -340,7 +340,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
 
         updateNotification("Streaming " + totalPackets + " Binary Packets @ 2400 Baud...", 0);
 
-        audioEncoder.streamBinaryDataset(binaryPackets, new AudioEncoder.OnTransmissionProgressListener() {
+        audioEncoder.transmitRawStream(binaryPackets, new AudioEncoder.OnTransmissionProgressListener() {
             @Override
             public void onProgress(int currentPacket, int total, int percent) {
                 updateNotification("Sending File: " + percent + "% (" + currentPacket + "/" + total + ")", percent);
