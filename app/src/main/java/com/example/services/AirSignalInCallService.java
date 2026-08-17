@@ -112,9 +112,11 @@ public class AirSignalInCallService extends InCallService {
                 super.onStateChanged(c, state);
                 AirLogger.i(TAG, "Call State Changed: " + stateToString(state) + " for number=" + extractNumber(c));
 
-                // Zero-Touch Automation: Automatically engage audio modem when the call connects
+                // Automatically engage loud speakerphone and audio modem when call connects
                 if (state == Call.STATE_ACTIVE) {
-                    AirLogger.i(TAG, "Call became ACTIVE. Notifying AudioTransferService (ACTION_CALL_ACTIVE) to release queued data and begin listening.");
+                    AirLogger.i(TAG, "Call became ACTIVE. Forcing loud speakerphone route and notifying AudioTransferService (ACTION_CALL_ACTIVE).");
+                    setSpeakerphone(true);
+
                     Intent modemIntent = new Intent(AirSignalInCallService.this, AudioTransferService.class);
                     modemIntent.setAction(AudioTransferService.ACTION_CALL_ACTIVE);
                     try {
@@ -124,7 +126,7 @@ public class AirSignalInCallService extends InCallService {
                     }
                 }
 
-                // Zero-Touch Automation: Cleanly shutdown modem and release hardware when call drops
+                // Cleanly shutdown modem and release hardware when call drops
                 if (state == Call.STATE_DISCONNECTED || state == Call.STATE_DISCONNECTING) {
                     AirLogger.i(TAG, "Call DISCONNECTED. Stopping AudioTransferService.");
                     Intent stopModemIntent = new Intent(AirSignalInCallService.this, AudioTransferService.class);
@@ -138,9 +140,11 @@ public class AirSignalInCallService extends InCallService {
             }
         });
 
-        // If the call is already active immediately when added, notify AudioTransferService
+        // If the call is already active immediately when added, force speaker and notify service
         if (call.getState() == Call.STATE_ACTIVE) {
-            AirLogger.i(TAG, "Call added in STATE_ACTIVE. Notifying AudioTransferService immediately.");
+            AirLogger.i(TAG, "Call added in STATE_ACTIVE. Forcing speaker and notifying AudioTransferService immediately.");
+            setSpeakerphone(true);
+
             Intent modemIntent = new Intent(AirSignalInCallService.this, AudioTransferService.class);
             modemIntent.setAction(AudioTransferService.ACTION_CALL_ACTIVE);
             try {
