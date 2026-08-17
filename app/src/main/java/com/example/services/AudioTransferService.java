@@ -528,12 +528,17 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
 
         // Check if frame contains the Phonetic Base64 Image signature
         String previewStr = new String(frameData, StandardCharsets.UTF_8);
-        if (previewStr.startsWith(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE)) {
+        if (previewStr.contains(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE)) {
             AirLogger.i(TAG, "Detected incoming Phonetic Base64 Image stream!");
             List<String> tokens = PhoneticImageTransceiver.parseTransmissionToTokens(frameData);
             PhoneticImageTransceiver.receiveAndReconstructImage(getApplicationContext(), tokens, "received_phonetic_photo.webp");
 
             updateNotification("Received Phonetic Image!", 100);
+
+            Intent completeBroadcast = new Intent(FileAssembler.ACTION_TRANSFER_PROGRESS);
+            completeBroadcast.putExtra(FileAssembler.EXTRA_STATUS, "COMPLETED");
+            sendBroadcast(completeBroadcast);
+
             mainHandler.postDelayed(() -> updateNotification("Listening for incoming data...", 0), 3000);
             return;
         }
