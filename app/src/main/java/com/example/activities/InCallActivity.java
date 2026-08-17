@@ -119,6 +119,7 @@ public class InCallActivity extends AppCompatActivity {
                     }
                     tvRecordingBadge.setVisibility(View.VISIBLE);
                     tvRecordingBadge.setText("⚡ RECEIVING IN-CALL DATA...");
+                    tvRecordingBadge.setOnClickListener(null);
                     Toast.makeText(InCallActivity.this, "Receiver Mode Active: In-Call Data Transfer Started", Toast.LENGTH_SHORT).show();
                 });
             } else if (FileAssembler.ACTION_TRANSFER_PROGRESS.equals(action)) {
@@ -131,6 +132,7 @@ public class InCallActivity extends AppCompatActivity {
 
                     if ("COMPLETED".equalsIgnoreCase(status)) {
                         tvRecordingBadge.setText("⚡ TRANSFER COMPLETE (100%)");
+                        tvRecordingBadge.setOnClickListener(null);
                         // Auto-hide the completion badge after 3 seconds
                         badgeDismissRunnable = () -> {
                             if (tvRecordingBadge != null && !isRecording) {
@@ -285,6 +287,19 @@ public class InCallActivity extends AppCompatActivity {
                     tvCallStatus.setText("00:00");
                     startCallTimer();
                     AirLogger.i(TAG, "Call state ACTIVE - started call duration timer");
+
+                    // Prompt transmitter to initiate transmission once answered
+                    if (tvRecordingBadge != null && !isRecording) {
+                        tvRecordingBadge.setVisibility(View.VISIBLE);
+                        tvRecordingBadge.setText("⚡ TAP TO TRANSMIT DATA NOW");
+                        tvRecordingBadge.setOnClickListener(v -> {
+                            Intent triggerIntent = new Intent(InCallActivity.this, AudioTransferService.class);
+                            triggerIntent.setAction(AudioTransferService.ACTION_EXECUTE_STAGED_TRANSMISSION);
+                            startService(triggerIntent);
+                            tvRecordingBadge.setText("⚡ TRANSMITTING ACTIVATION...");
+                            Toast.makeText(InCallActivity.this, "Initiating Acoustic Data Stream...", Toast.LENGTH_SHORT).show();
+                        });
+                    }
                 }
                 break;
             case android.telecom.Call.STATE_DISCONNECTED:
