@@ -21,6 +21,8 @@ public class AudioReceiver {
     public static final byte SYNC_PREAMBLE = (byte) 0xAA;
     public static final byte START_FRAME_DELIMITER = (byte) 0x7E;
 
+    public static final int MAX_STREAM_BUFFER_SIZE = 32768; // 32 KB maximum image/file buffer
+
     // Standardized handshake command strings
     public static final String CMD_ACTIVATE_RECEIVER = "AIR_CMD:ACTIVATE_RECEIVER";
     public static final String CMD_RECEIVER_READY = "AIR_ACK:RECEIVER_READY";
@@ -177,6 +179,7 @@ public class AudioReceiver {
 
         int currentByteAccumulator = 0;
         int bitCount = 0;
+        int consecutiveSilenceCount = 0;
 
         // Frame Detection State Machine
         boolean isLockedOnPreamble = false;
@@ -193,10 +196,24 @@ public class AudioReceiver {
                 int bitVal = AudioDecoder.detectBit(bitBuffer, 0, read, activeSampleRate);
 
                 if (bitVal == -1) {
-                    // Ambient silence or voice chatter — skip
+                    consecutiveSilenceCount++;
+
+                    // If we accumulated an image stream and tone silence is reached (end of transmission), deliver full stream
+                    if (isAccumulatingImage && frameBuffer.size() > 50 && consecutiveSilenceCount > 30) {
+                        byte[] fullStreamBytes = frameBuffer.toByteArray();
+                        AirLogger.i(TAG, "End of audio transmission detected via silence interval. Delivering full Phonetic Image (" + fullStreamBytes.length + " bytes).");
+                        if (listener != null) {
+                            listener.onFrameDecoded(fullStreamBytes);
+                        }
+                        isLockedOnPreamble = false;
+                        isAccumulatingImage = false;
+                        consecutiveSilenceCount = 0;
+                        frameBuffer.reset();
+                    }
                     continue;
                 }
 
+                consecutiveSilenceCount = 0;
                 currentByteAccumulator = (currentByteAccumulator << 1) | (bitVal & 1);
                 bitCount++;
 
@@ -223,7 +240,7 @@ public class AudioReceiver {
                         String preview = new String(currentBufferBytes, StandardCharsets.UTF_8);
 
                         // 1. Check for remote RECEIVER_READY ACK (Sender side)
-                        if (preview.contains(CMD_RECEIVER_READY)) {
+                        if (!isAccumulatingImage && preview.contains(CMD_RECEIVER_READY)) {
                             AirLogger.i(TAG, "Acoustic AIR_ACK:RECEIVER_READY detected! Remote receiver answered and listening.");
                             if (listener != null) {
                                 listener.onReceiverReadyAckReceived();
@@ -234,7 +251,7 @@ public class AudioReceiver {
                         }
 
                         // 2. Check for remote ACTIVATE_RECEIVER acoustic handshake command (Receiver side)
-                        if (preview.contains(CMD_ACTIVATE_RECEIVER)) {
+                        if (!isAccumulatingImage && preview.contains(CMD_ACTIVATE_RECEIVER)) {
                             AirLogger.i(TAG, "Remote ACTIVATE_RECEIVER command detected over voice call!");
                             if (listener != null) {
                                 listener.onReceiverActivationCommand();
@@ -260,12 +277,14 @@ public class AudioReceiver {
                             }
                         }
 
-                        // 4. Phonetic Image Preamble Check & Full Stream Accumulator
+                        // 4. Phonetic Image Preamble Check & Full Stream Accumulator (Up to 32 KB)
                         if (preview.contains(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE)) {
                             isAccumulatingImage = true;
-                            
-                            // Check if full stream reached trailing delimiter '#' (token count + size closure)
-                            if (preview.length() > 30 && countOccurrences(preview, '#') >= 2 && preview.endsWith("#")) {
+
+                            // Check if stream reached the trailing closure delimiters (contains total tokens & original length closures)
+                            int firstHash = preview.indexOf('#');
+                            int lastHash = preview.lastIndexOf('#');
+                            if (firstHash != -1 && lastHash > firstHash && (preview.endsWith("#") || countOccurrences(preview, '#') >= 3)) {
                                 AirLogger.i(TAG, "Complete Phonetic Image stream accumulated (" + currentBufferBytes.length + " bytes). Delivering.");
                                 if (listener != null) {
                                     listener.onFrameDecoded(currentBufferBytes);
@@ -285,8 +304,8 @@ public class AudioReceiver {
                                 }
                                 isLockedOnPreamble = false;
                                 frameBuffer.reset();
-                            } else if (frameBuffer.size() > 512) {
-                                // Safety flush for unidentified oversized frames
+                            } else if (frameBuffer.size() >= MAX_STREAM_BUFFER_SIZE) {
+                                // Safety limit flush
                                 if (listener != null) {
                                     listener.onFrameDecoded(currentBufferBytes);
                                 }
