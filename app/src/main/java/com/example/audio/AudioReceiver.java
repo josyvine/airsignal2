@@ -97,11 +97,12 @@ public class AudioReceiver {
     public void startListening() {
         if (isListening.get()) return;
 
-        // Hardware Compatibility Probe Matrix
+        // Hardware Compatibility Probe Matrix (Prioritizing raw MIC to bypass call noise-suppression DSP)
         int[] sampleRates = new int[]{44100, 48000, 16000, 8000};
         int[] audioSources = new int[]{
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                 MediaRecorder.AudioSource.DEFAULT
         };
 
@@ -359,8 +360,9 @@ public class AudioReceiver {
 
     private String sourceToString(int source) {
         switch (source) {
-            case MediaRecorder.AudioSource.VOICE_COMMUNICATION: return "VOICE_COMMUNICATION";
             case MediaRecorder.AudioSource.MIC: return "MIC";
+            case MediaRecorder.AudioSource.VOICE_RECOGNITION: return "VOICE_RECOGNITION";
+            case MediaRecorder.AudioSource.VOICE_COMMUNICATION: return "VOICE_COMMUNICATION";
             case MediaRecorder.AudioSource.DEFAULT: return "DEFAULT";
             default: return "SOURCE_" + source;
         }
