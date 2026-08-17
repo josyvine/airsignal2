@@ -161,7 +161,7 @@ public class TransferAdapter extends RecyclerView.Adapter<TransferAdapter.ViewHo
     private void showItemDetailsDialog(Context context, TransferItem item) {
         String details = "File ID: " + item.getFileId() +
                 "\nFile Name: " + item.getFilename() +
-                "\nSize: " + (item.getFileSize() > 0 ? (item.getFileSize() / 1024) + " KB" : "Variable") +
+                "\nSize: " + (item.getSize() > 0 ? (item.getSize() / 1024) + " KB" : "Variable") +
                 "\nMode: " + item.getMode() +
                 "\nStatus: " + item.getStatus() +
                 "\nProgress: " + item.getProgress() + "% (" + item.getReceivedPackets() + "/" + item.getTotalPackets() + " packets)";
