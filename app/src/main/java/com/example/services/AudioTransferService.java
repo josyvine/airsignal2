@@ -97,9 +97,10 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AirSignal::AudioTransferWakeLock");
         }
 
-        audioEncoder = new AudioEncoder(2400);
+        // Standard Bell 202 FSK standard (1200 Baud) for cellular AMR voice stability
+        audioEncoder = new AudioEncoder(1200);
         audioReceiver = new AudioReceiver(this);
-        audioReceiver.setBaudRate(2400);
+        audioReceiver.setBaudRate(1200);
 
         notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         notificationBuilder = new NotificationCompat.Builder(this, CHANNEL_ID)
@@ -186,6 +187,13 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
                     audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
                 }
                 audioManager.setSpeakerphoneOn(true);
+
+                // Maximize volume streams so acoustic tones travel directly into call microphone
+                int maxCallVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL);
+                audioManager.setStreamVolume(AudioManager.STREAM_VOICE_CALL, maxCallVol, 0);
+
+                int maxMusicVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxMusicVol, 0);
             } catch (Exception e) {
                 AirLogger.e(TAG, "Error configuring AudioManager", e);
             }
@@ -208,7 +216,13 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
 
         // Small 800ms stabilization delay after call connect
         mainHandler.postDelayed(() -> {
+            ensureAudioRoutingAndListening();
             updateNotification("Sending activation command to receiver...", 0);
+
+            // Broadcast active transfer status to InCallActivity
+            Intent startBroadcast = new Intent(FileAssembler.ACTION_TRANSFER_PROGRESS);
+            startBroadcast.putExtra(FileAssembler.EXTRA_STATUS, "TRANSFERRING");
+            sendBroadcast(startBroadcast);
 
             // Transmit the ACTIVATE_RECEIVER handshake tone
             audioEncoder.transmitActivationCommand(new AudioEncoder.OnTransmissionProgressListener() {
@@ -242,6 +256,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
 
             mainHandler.post(() -> {
                 try {
+                    ensureAudioRoutingAndListening();
                     if (ACTION_SEND_TOKEN.equals(payload.action)) {
                         transmitTokenInternal(payload.tokenBytes);
                     } else if (ACTION_SEND_PHONETIC_IMAGE.equals(payload.action)) {
@@ -280,6 +295,11 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
             public void onComplete() {
                 AirLogger.i(TAG, "Semantic Token transmission completed successfully.");
                 updateNotification("Token Transmitted! Listening for data...", 100);
+
+                Intent completeBroadcast = new Intent(FileAssembler.ACTION_TRANSFER_PROGRESS);
+                completeBroadcast.putExtra(FileAssembler.EXTRA_STATUS, "COMPLETED");
+                sendBroadcast(completeBroadcast);
+
                 mainHandler.postDelayed(() -> updateNotification("Listening for incoming data...", 0), 3000);
             }
 
@@ -313,6 +333,10 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
                     public void onProgress(int step, int totalSteps, String statusMessage) {
                         int percent = (int) (((double) step / (double) Math.max(1, totalSteps)) * 100);
                         updateNotification("Phonetic Image: " + statusMessage, percent);
+
+                        Intent progressIntent = new Intent(FileAssembler.ACTION_TRANSFER_PROGRESS);
+                        progressIntent.putExtra(FileAssembler.EXTRA_STATUS, "TRANSFERRING");
+                        sendBroadcast(progressIntent);
                     }
 
                     @Override
@@ -334,6 +358,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
                         db.insertTransfer(item);
 
                         Intent broadcast = new Intent(FileAssembler.ACTION_TRANSFER_PROGRESS);
+                        broadcast.putExtra(FileAssembler.EXTRA_STATUS, "COMPLETED");
                         sendBroadcast(broadcast);
 
                         mainHandler.postDelayed(() -> updateNotification("Listening for incoming data...", 0), 3000);
@@ -373,7 +398,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
         final String effectiveFileId = (fileId != null) ? fileId : ("FILE_" + System.currentTimeMillis());
         final int totalPackets = binaryPackets.size();
 
-        updateNotification("Streaming " + totalPackets + " Binary Packets @ 2400 Baud...", 0);
+        updateNotification("Streaming " + totalPackets + " Binary Packets @ 1200 Baud...", 0);
 
         audioEncoder.transmitRawStream(binaryPackets, new AudioEncoder.OnTransmissionProgressListener() {
             @Override
@@ -387,13 +412,14 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
                         fileSize > 0 ? fileSize : file.length(),
                         percent,
                         "TRANSFERRING",
-                        "RAW_BINARY_2400",
+                        "RAW_BINARY_1200",
                         total,
                         currentPacket
                 );
                 db.insertTransfer(item);
 
                 Intent broadcast = new Intent(FileAssembler.ACTION_TRANSFER_PROGRESS);
+                broadcast.putExtra(FileAssembler.EXTRA_STATUS, "TRANSFERRING");
                 sendBroadcast(broadcast);
             }
 
@@ -409,13 +435,14 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
                         fileSize > 0 ? fileSize : file.length(),
                         100,
                         TransferItem.STATUS_COMPLETED,
-                        "RAW_BINARY_2400",
+                        "RAW_BINARY_1200",
                         totalPackets,
                         totalPackets
                 );
                 db.insertTransfer(item);
 
                 Intent broadcast = new Intent(FileAssembler.ACTION_TRANSFER_PROGRESS);
+                broadcast.putExtra(FileAssembler.EXTRA_STATUS, "COMPLETED");
                 sendBroadcast(broadcast);
 
                 mainHandler.postDelayed(() -> updateNotification("Listening for incoming data...", 0), 3000);
