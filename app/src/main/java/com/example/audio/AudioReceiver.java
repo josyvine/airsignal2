@@ -180,6 +180,7 @@ public class AudioReceiver {
 
         // Frame Detection State Machine
         boolean isLockedOnPreamble = false;
+        boolean isAccumulatingImage = false;
         ByteArrayOutputStream frameBuffer = new ByteArrayOutputStream();
 
         while (isListening.get()) {
@@ -212,6 +213,7 @@ public class AudioReceiver {
                     if (!isLockedOnPreamble) {
                         if (completedByte == START_FRAME_DELIMITER) {
                             isLockedOnPreamble = true;
+                            isAccumulatingImage = false;
                             frameBuffer.reset();
                         }
                     } else {
@@ -243,7 +245,7 @@ public class AudioReceiver {
                         }
 
                         // 3. Mode 4 Check: If 16 bytes accumulated, attempt TemplateToken validation
-                        if (frameBuffer.size() == TemplateToken.TOKEN_BYTE_SIZE) {
+                        if (!isAccumulatingImage && frameBuffer.size() == TemplateToken.TOKEN_BYTE_SIZE) {
                             byte[] candidateBytes = frameBuffer.toByteArray();
                             TemplateToken token = TemplateToken.fromByteArray(candidateBytes);
 
@@ -258,23 +260,39 @@ public class AudioReceiver {
                             }
                         }
 
-                        // 4. Phonetic Image Preamble Check
-                        if (preview.contains(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE) && currentBufferBytes.length > 256) {
-                            if (listener != null) {
-                                listener.onFrameDecoded(currentBufferBytes);
+                        // 4. Phonetic Image Preamble Check & Full Stream Accumulator
+                        if (preview.contains(PhoneticImageTransceiver.PHONETIC_IMG_PREAMBLE)) {
+                            isAccumulatingImage = true;
+                            
+                            // Check if full stream reached trailing delimiter '#' (token count + size closure)
+                            if (preview.length() > 30 && countOccurrences(preview, '#') >= 2 && preview.endsWith("#")) {
+                                AirLogger.i(TAG, "Complete Phonetic Image stream accumulated (" + currentBufferBytes.length + " bytes). Delivering.");
+                                if (listener != null) {
+                                    listener.onFrameDecoded(currentBufferBytes);
+                                }
+                                isLockedOnPreamble = false;
+                                isAccumulatingImage = false;
+                                frameBuffer.reset();
+                                continue;
                             }
-                            isLockedOnPreamble = false;
-                            frameBuffer.reset();
-                            continue;
                         }
 
-                        // 5. Mode 2/3 Raw Binary Packet Frame flush (263-byte packet or 512-byte flush)
-                        if (frameBuffer.size() >= 263) {
-                            if (listener != null) {
-                                listener.onFrameDecoded(currentBufferBytes);
+                        // 5. Mode 2/3 Raw Binary Packet Frame flush (Binary packets start with 0x53 'S' and are 263 bytes)
+                        if (!isAccumulatingImage && frameBuffer.size() >= 263) {
+                            if (currentBufferBytes[0] == 0x53 || containsBinaryHeader(currentBufferBytes)) {
+                                if (listener != null) {
+                                    listener.onFrameDecoded(currentBufferBytes);
+                                }
+                                isLockedOnPreamble = false;
+                                frameBuffer.reset();
+                            } else if (frameBuffer.size() > 512) {
+                                // Safety flush for unidentified oversized frames
+                                if (listener != null) {
+                                    listener.onFrameDecoded(currentBufferBytes);
+                                }
+                                isLockedOnPreamble = false;
+                                frameBuffer.reset();
                             }
-                            isLockedOnPreamble = false;
-                            frameBuffer.reset();
                         }
                     }
                 }
@@ -285,6 +303,22 @@ public class AudioReceiver {
         if (frameBuffer.size() > 0 && listener != null) {
             listener.onFrameDecoded(frameBuffer.toByteArray());
         }
+    }
+
+    private int countOccurrences(String str, char ch) {
+        int count = 0;
+        for (int i = 0; i < str.length(); i++) {
+            if (str.charAt(i) == ch) count++;
+        }
+        return count;
+    }
+
+    private boolean containsBinaryHeader(byte[] data) {
+        if (data == null || data.length < 7) return false;
+        for (int i = 0; i <= data.length - 7; i++) {
+            if (data[i] == 0x53) return true;
+        }
+        return false;
     }
 
     public void stopListening() {
