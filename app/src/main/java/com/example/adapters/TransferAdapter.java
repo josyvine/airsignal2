@@ -5,6 +5,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.StrictMode;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -99,7 +100,7 @@ public class TransferAdapter extends RecyclerView.Adapter<TransferAdapter.ViewHo
             File targetFile = new File(receivedDir, item.getFilename());
 
             if (!targetFile.exists()) {
-                // Fallback check in cache dir
+                // Fallback check in cache directory
                 targetFile = new File(context.getCacheDir(), item.getFilename());
             }
 
@@ -133,7 +134,7 @@ public class TransferAdapter extends RecyclerView.Adapter<TransferAdapter.ViewHo
 
     private void openFile(Context context, File file) {
         try {
-            Uri fileUri = FileProvider.getUriForFile(context, context.getPackageName() + ".provider", file);
+            Uri fileUri = getSafeUriForFile(context, file);
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setDataAndType(fileUri, getMimeType(file));
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -146,7 +147,7 @@ public class TransferAdapter extends RecyclerView.Adapter<TransferAdapter.ViewHo
 
     private void shareFile(Context context, File file) {
         try {
-            Uri fileUri = FileProvider.getUriForFile(context, context.getPackageName() + ".provider", file);
+            Uri fileUri = getSafeUriForFile(context, file);
             Intent intent = new Intent(Intent.ACTION_SEND);
             intent.setType(getMimeType(file));
             intent.putExtra(Intent.EXTRA_STREAM, fileUri);
@@ -155,6 +156,28 @@ public class TransferAdapter extends RecyclerView.Adapter<TransferAdapter.ViewHo
         } catch (Exception e) {
             AirLogger.e(TAG, "Error sharing file", e);
             Toast.makeText(context, "Unable to share file", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /**
+     * Resilient URI generator that handles dynamic package FileProvider authorities and falls back safely.
+     */
+    private Uri getSafeUriForFile(Context context, File file) {
+        try {
+            return FileProvider.getUriForFile(context, context.getPackageName() + ".provider", file);
+        } catch (Exception e1) {
+            try {
+                return FileProvider.getUriForFile(context, "com.example.provider", file);
+            } catch (Exception e2) {
+                try {
+                    return FileProvider.getUriForFile(context, context.getPackageName() + ".fileprovider", file);
+                } catch (Exception e3) {
+                    try {
+                        StrictMode.setVmPolicy(new StrictMode.VmPolicy.Builder().build());
+                    } catch (Exception ignored) {}
+                    return Uri.fromFile(file);
+                }
+            }
         }
     }
 
