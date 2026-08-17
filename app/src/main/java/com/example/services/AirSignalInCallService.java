@@ -111,18 +111,19 @@ public class AirSignalInCallService extends InCallService {
             public void onStateChanged(Call c, int state) {
                 super.onStateChanged(c, state);
                 AirLogger.i(TAG, "Call State Changed: " + stateToString(state) + " for number=" + extractNumber(c));
-                
+
                 // Zero-Touch Automation: Automatically engage audio modem when the call connects
                 if (state == Call.STATE_ACTIVE) {
-                    AirLogger.i(TAG, "Call became ACTIVE. Automatically starting AudioTransferService for background FSK listening.");
+                    AirLogger.i(TAG, "Call became ACTIVE. Notifying AudioTransferService (ACTION_CALL_ACTIVE) to release queued data and begin listening.");
                     Intent modemIntent = new Intent(AirSignalInCallService.this, AudioTransferService.class);
+                    modemIntent.setAction(AudioTransferService.ACTION_CALL_ACTIVE);
                     try {
                         startService(modemIntent);
                     } catch (Exception e) {
-                        AirLogger.e(TAG, "Failed to auto-start AudioTransferService", e);
+                        AirLogger.e(TAG, "Failed to auto-start AudioTransferService with ACTION_CALL_ACTIVE", e);
                     }
                 }
-                
+
                 // Zero-Touch Automation: Cleanly shutdown modem and release hardware when call drops
                 if (state == Call.STATE_DISCONNECTED || state == Call.STATE_DISCONNECTING) {
                     AirLogger.i(TAG, "Call DISCONNECTED. Stopping AudioTransferService.");
@@ -136,6 +137,18 @@ public class AirSignalInCallService extends InCallService {
                 }
             }
         });
+
+        // If the call is already active immediately when added, notify AudioTransferService
+        if (call.getState() == Call.STATE_ACTIVE) {
+            AirLogger.i(TAG, "Call added in STATE_ACTIVE. Notifying AudioTransferService immediately.");
+            Intent modemIntent = new Intent(AirSignalInCallService.this, AudioTransferService.class);
+            modemIntent.setAction(AudioTransferService.ACTION_CALL_ACTIVE);
+            try {
+                startService(modemIntent);
+            } catch (Exception e) {
+                AirLogger.e(TAG, "Failed to send ACTION_CALL_ACTIVE onCallAdded", e);
+            }
+        }
 
         try {
             Intent intent = new Intent(this, InCallActivity.class);
@@ -189,7 +202,7 @@ public class AirSignalInCallService extends InCallService {
         if (activeCall == call) {
             activeCall = null;
         }
-        
+
         try {
             // Failsafe teardown of background modem if onStateChanged missed the transition
             Intent stopModemIntent = new Intent(AirSignalInCallService.this, AudioTransferService.class);
@@ -198,7 +211,7 @@ public class AirSignalInCallService extends InCallService {
         } catch (Exception e) {
             AirLogger.e(TAG, "Failed failsafe stop of AudioTransferService", e);
         }
-        
+
         try {
             stopForeground(true);
         } catch (Exception e) {
