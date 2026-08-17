@@ -9,6 +9,7 @@ import com.example.models.TemplateToken;
 import com.example.utils.AirLogger;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -22,6 +23,9 @@ public class AudioEncoder {
 
     public static final byte SYNC_PREAMBLE = (byte) 0xAA;
     public static final byte START_FRAME_DELIMITER = (byte) 0x7E;
+
+    // Standardized handshake command string to awaken and lock the remote receiver into Receiver Mode
+    public static final String CMD_ACTIVATE_RECEIVER = "AIR_CMD:ACTIVATE_RECEIVER";
 
     private int baudRate = 1200; // 300, 600, 1200, 2400
     private final AtomicBoolean isTransmitting = new AtomicBoolean(false);
@@ -66,6 +70,15 @@ public class AudioEncoder {
                 activeAudioTrack = null;
             }
         }
+    }
+
+    /**
+     * Transmits the ACTIVATE_RECEIVER acoustic handshake command over the active voice call.
+     */
+    public void transmitActivationCommand(final OnTransmissionProgressListener listener) {
+        AirLogger.i(TAG, "Transmitting remote ACTIVATE_RECEIVER acoustic command...");
+        byte[] commandBytes = CMD_ACTIVATE_RECEIVER.getBytes(StandardCharsets.UTF_8);
+        transmitDataOverAudio(commandBytes, listener);
     }
 
     /**
@@ -247,18 +260,18 @@ public class AudioEncoder {
         byte[] pcmBytes = convertShortsToBytes(pcmSamples);
 
         activeAudioTrack = new AudioTrack.Builder()
-                .setAudioAttributes(new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build())
-                .setAudioFormat(new AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(SAMPLE_RATE)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                        .build())
-                .setBufferSizeInBytes(pcmBytes.length)
-                .setTransferMode(AudioTrack.MODE_STATIC)
-                .build();
+                        .setAudioAttributes(new AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .build())
+                        .setAudioFormat(new AudioFormat.Builder()
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(SAMPLE_RATE)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                .build())
+                        .setBufferSizeInBytes(pcmBytes.length)
+                        .setTransferMode(AudioTrack.MODE_STATIC)
+                        .build();
 
         activeAudioTrack.write(pcmBytes, 0, pcmBytes.length);
         activeAudioTrack.play();
