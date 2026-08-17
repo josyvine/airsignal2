@@ -24,8 +24,9 @@ public class AudioEncoder {
     public static final byte SYNC_PREAMBLE = (byte) 0xAA;
     public static final byte START_FRAME_DELIMITER = (byte) 0x7E;
 
-    // Standardized handshake command string to awaken and lock the remote receiver into Receiver Mode
+    // Standardized handshake command strings for automated two-way connection synchronization
     public static final String CMD_ACTIVATE_RECEIVER = "AIR_CMD:ACTIVATE_RECEIVER";
+    public static final String CMD_RECEIVER_READY = "AIR_ACK:RECEIVER_READY";
 
     private int baudRate = 1200; // 300, 600, 1200, 2400
     private final AtomicBoolean isTransmitting = new AtomicBoolean(false);
@@ -73,7 +74,16 @@ public class AudioEncoder {
     }
 
     /**
-     * Transmits the ACTIVATE_RECEIVER acoustic handshake command over the active voice call.
+     * Receiver-side Automation: Transmits the 0.5s acoustic handshake acknowledgment to announce call answer.
+     */
+    public void transmitReceiverReadyAck(final OnTransmissionProgressListener listener) {
+        AirLogger.i(TAG, "Transmitting receiver ready acoustic acknowledgment (AIR_ACK:RECEIVER_READY)...");
+        byte[] ackBytes = CMD_RECEIVER_READY.getBytes(StandardCharsets.UTF_8);
+        transmitDataOverAudio(ackBytes, listener);
+    }
+
+    /**
+     * Transmitter-side Command: Transmits the ACTIVATE_RECEIVER acoustic handshake command over the call.
      */
     public void transmitActivationCommand(final OnTransmissionProgressListener listener) {
         AirLogger.i(TAG, "Transmitting remote ACTIVATE_RECEIVER acoustic command...");
