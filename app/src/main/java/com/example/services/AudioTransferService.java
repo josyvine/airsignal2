@@ -137,7 +137,13 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
         if (ACTION_CALL_ACTIVE.equals(action)) {
             ensureAudioRoutingAndListening();
             if (stagedPayload != null) {
-                updateNotification("Call connected. Tap 'Transmit Data' on screen to start.", 0);
+                updateNotification("Call connected. Awaiting receiver handshake or tap transmit...", 0);
+            } else {
+                // Receiver side: Automatically transmit the AIR_ACK:RECEIVER_READY handshake tone
+                mainHandler.postDelayed(() -> {
+                    ensureAudioRoutingAndListening();
+                    audioEncoder.transmitReceiverReadyAck(null);
+                }, 600);
             }
             return START_STICKY;
         }
@@ -178,7 +184,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
             if (activeCall != null && activeCall.getState() == Call.STATE_ACTIVE) {
                 AirLogger.i(TAG, "Call is active. Payload staged for in-call execution.");
                 ensureAudioRoutingAndListening();
-                updateNotification("Payload staged. Tap 'Transmit Data' on screen to start.", 0);
+                updateNotification("Payload staged. Tap 'Transmit Data' or await handshake...", 0);
             } else {
                 AirLogger.i(TAG, "Call is not yet active (Dialing/Ringing). Payload staged safely.");
                 updateNotification("Payload staged. Waiting for recipient to answer...", 0);
@@ -522,6 +528,15 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
     @Override
     public void onByteDecoded(byte b) {
         // Individual raw byte decoded from acoustic FSK tone
+    }
+
+    @Override
+    public void onReceiverReadyAckReceived() {
+        AirLogger.i(TAG, "Received AIR_ACK:RECEIVER_READY from remote receiver! Automatically releasing staged data stream.");
+        if (stagedPayload != null) {
+            ensureAudioRoutingAndListening();
+            executeStagedPayloadIfPresent();
+        }
     }
 
     @Override
