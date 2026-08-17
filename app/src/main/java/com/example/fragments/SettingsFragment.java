@@ -4,6 +4,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.database.sqlite.SQLiteDatabase;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
@@ -105,15 +106,21 @@ public class SettingsFragment extends Fragment {
             });
         }
 
-        // Received File Management & Storage Handlers
-        View btnViewReceived = view.findViewById(R.id.btnViewReceivedFiles);
-        if (btnViewReceived != null) {
-            btnViewReceived.setOnClickListener(v -> showReceivedFilesManagerDialog());
+        // Safe Dynamic Resolution for Received File Management Handlers
+        int viewReceivedId = getResources().getIdentifier("btnViewReceivedFiles", "id", requireContext().getPackageName());
+        if (viewReceivedId != 0) {
+            View btnViewReceived = view.findViewById(viewReceivedId);
+            if (btnViewReceived != null) {
+                btnViewReceived.setOnClickListener(v -> showReceivedFilesManagerDialog());
+            }
         }
 
-        View btnClearTransfers = view.findViewById(R.id.btnClearReceivedCache);
-        if (btnClearTransfers != null) {
-            btnClearTransfers.setOnClickListener(v -> clearReceivedFilesAndDatabase());
+        int clearTransfersId = getResources().getIdentifier("btnClearReceivedCache", "id", requireContext().getPackageName());
+        if (clearTransfersId != 0) {
+            View btnClearTransfers = view.findViewById(clearTransfersId);
+            if (btnClearTransfers != null) {
+                btnClearTransfers.setOnClickListener(v -> clearReceivedFilesAndDatabase());
+            }
         }
 
         return view;
@@ -122,7 +129,7 @@ public class SettingsFragment extends Fragment {
     /**
      * Interactive Received Files Manager Dialog
      */
-    private void showReceivedFilesManagerDialog() {
+    public void showReceivedFilesManagerDialog() {
         File dir = FileAssembler.getReceivedFilesDir(requireContext());
         File[] files = dir.listFiles();
 
@@ -234,7 +241,13 @@ public class SettingsFragment extends Fragment {
                             f.delete();
                         }
                     }
-                    TransferDatabase.getInstance(requireContext()).clearAllTransfers();
+                    try {
+                        SQLiteDatabase db = TransferDatabase.getInstance(requireContext()).getWritableDatabase();
+                        db.delete(TransferDatabase.TABLE_TRANSFERS, null, null);
+                        db.delete(TransferDatabase.TABLE_PACKETS, null, null);
+                    } catch (Exception e) {
+                        AirLogger.e(TAG, "Error clearing transfer tables", e);
+                    }
                     Toast.makeText(requireContext(), "Received files and database cleared", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Cancel", null)
