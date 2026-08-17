@@ -49,6 +49,7 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
     public static final String ACTION_SEND_BINARY_FILE = "com.example.ACTION_SEND_BINARY_FILE";
     public static final String ACTION_SEND_AUDIO_DATA = "com.example.ACTION_SEND_AUDIO_DATA";
     public static final String ACTION_CALL_ACTIVE = "com.example.ACTION_CALL_ACTIVE";
+    public static final String ACTION_RECEIVER_MODE_ACTIVE = "com.example.ACTION_RECEIVER_MODE_ACTIVE";
     public static final String ACTION_STOP_SERVICE = "com.example.ACTION_STOP_SERVICE";
 
     public static final String EXTRA_TOKEN_PAYLOAD = "extra_token_payload";
@@ -205,21 +206,55 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
         final StagedPayload payload = stagedPayload;
         stagedPayload = null; // Clear queue so it is only transmitted once
 
-        // Small 800ms delay to allow cellular voice channel codecs (AMR/EVS) to stabilize on connect
+        // Small 800ms stabilization delay after call connect
         mainHandler.postDelayed(() -> {
-            try {
-                if (ACTION_SEND_TOKEN.equals(payload.action)) {
-                    transmitTokenInternal(payload.tokenBytes);
-                } else if (ACTION_SEND_PHONETIC_IMAGE.equals(payload.action)) {
-                    transmitPhoneticImageInternal(payload.filePath, payload.fileName, payload.fileSize);
-                } else if (ACTION_SEND_BINARY_FILE.equals(payload.action) || ACTION_SEND_AUDIO_DATA.equals(payload.action) || ACTION_SEND_RAW_BINARY.equals(payload.action)) {
-                    transmitBinaryFileInternal(payload.filePath, payload.fileName, payload.fileSize, payload.fileId);
+            updateNotification("Sending activation command to receiver...", 0);
+
+            // Transmit the ACTIVATE_RECEIVER handshake tone
+            audioEncoder.transmitActivationCommand(new AudioEncoder.OnTransmissionProgressListener() {
+                @Override
+                public void onProgress(int currentPacket, int totalPackets, int percent) {}
+
+                @Override
+                public void onComplete() {
+                    AirLogger.i(TAG, "Activation command transmitted. Entering 7-second synchronization countdown...");
+                    startSevenSecondCountdownThenTransmit(payload);
                 }
-            } catch (Exception e) {
-                AirLogger.e(TAG, "Error executing staged transmission", e);
-                updateNotification("Transmission Error: " + e.getMessage(), 0);
-            }
+
+                @Override
+                public void onError(Exception e) {
+                    AirLogger.e(TAG, "Error transmitting activation command, proceeding with fallback countdown", e);
+                    startSevenSecondCountdownThenTransmit(payload);
+                }
+            });
         }, 800);
+    }
+
+    private void startSevenSecondCountdownThenTransmit(final StagedPayload payload) {
+        new Thread(() -> {
+            for (int sec = 7; sec > 0; sec--) {
+                final int s = sec;
+                mainHandler.post(() -> updateNotification("Receiver activated. Synchronizing channel (" + s + "s)...", (7 - s) * 14));
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException ignored) {}
+            }
+
+            mainHandler.post(() -> {
+                try {
+                    if (ACTION_SEND_TOKEN.equals(payload.action)) {
+                        transmitTokenInternal(payload.tokenBytes);
+                    } else if (ACTION_SEND_PHONETIC_IMAGE.equals(payload.action)) {
+                        transmitPhoneticImageInternal(payload.filePath, payload.fileName, payload.fileSize);
+                    } else if (ACTION_SEND_BINARY_FILE.equals(payload.action) || ACTION_SEND_AUDIO_DATA.equals(payload.action) || ACTION_SEND_RAW_BINARY.equals(payload.action)) {
+                        transmitBinaryFileInternal(payload.filePath, payload.fileName, payload.fileSize, payload.fileId);
+                    }
+                } catch (Exception e) {
+                    AirLogger.e(TAG, "Error executing staged transmission", e);
+                    updateNotification("Transmission Error: " + e.getMessage(), 0);
+                }
+            });
+        }).start();
     }
 
     private void transmitTokenInternal(byte[] tokenBytes) {
@@ -449,6 +484,15 @@ public class AudioTransferService extends Service implements AudioReceiver.Audio
     @Override
     public void onByteDecoded(byte b) {
         // Individual raw byte decoded from acoustic FSK tone
+    }
+
+    @Override
+    public void onReceiverActivationCommand() {
+        AirLogger.i(TAG, "Remote ACTIVATE_RECEIVER signal received! Engaging Receiver Mode.");
+        updateNotification("Receiver Mode Active: Incoming In-Call Data Transfer...", 10);
+
+        Intent broadcast = new Intent(ACTION_RECEIVER_MODE_ACTIVE);
+        sendBroadcast(broadcast);
     }
 
     @Override
