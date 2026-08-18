@@ -1,20 +1,20 @@
 package com.example.knowledge;
 
 import android.content.Context;
+import android.media.MediaScannerConnection;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
 
 import com.example.audio.AudioEncoder;
 import com.example.utils.AirLogger;
+import com.example.utils.FileAssembler;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 public class PhoneticImageTransceiver {
@@ -111,7 +111,8 @@ public class PhoneticImageTransceiver {
 
     /**
      * RECEIVER: Accepts incoming phonetic tokens, expands every word back into its full Base64 block,
-     * decodes the exact original binary image, saves it to storage, and triggers the UI popup.
+     * decodes the exact original binary image, saves it directly to public Downloads/AirSignal_Transfers,
+     * registers it with MediaScanner, and triggers the UI popup.
      */
     public static void receiveAndReconstructImage(
             final Context context,
@@ -137,13 +138,12 @@ public class PhoneticImageTransceiver {
                 // 2. Decode Base64 back into the exact original binary bytes
                 byte[] exactImageBytes = Base64.decode(reconstructedBase64, Base64.NO_WRAP);
 
-                // 3. Save to app storage
-                File outputDir = context.getExternalFilesDir(null);
-                if (outputDir == null) outputDir = context.getFilesDir();
+                // 3. Save directly to public Downloads/AirSignal_Transfers/ folder
+                File outputDir = FileAssembler.getReceivedFilesDir(context);
 
                 String finalName = (outputFileName != null && !outputFileName.isEmpty())
                         ? outputFileName
-                        : "phonetic_photo_" + System.currentTimeMillis() + ".webp";
+                        : "photo_rx_" + System.currentTimeMillis() + ".webp";
 
                 File outputFile = new File(outputDir, finalName);
                 try (FileOutputStream fos = new FileOutputStream(outputFile)) {
@@ -151,10 +151,18 @@ public class PhoneticImageTransceiver {
                     fos.flush();
                 }
 
-                AirLogger.i(TAG, "Exact image successfully restored: " + outputFile.getAbsolutePath() +
+                // 4. Register with Android MediaScanner so it appears instantly in File Manager and Gallery
+                MediaScannerConnection.scanFile(
+                        context.getApplicationContext(),
+                        new String[]{outputFile.getAbsolutePath()},
+                        new String[]{"image/webp"},
+                        (path, uri) -> AirLogger.i(TAG, "MediaScanner indexed reconstructed image: " + path)
+                );
+
+                AirLogger.i(TAG, "Exact image successfully restored to public storage: " + outputFile.getAbsolutePath() +
                         " (" + exactImageBytes.length + " bytes)");
 
-                // 4. Zero-Touch UI Display: Auto-pop up the exact picture on the receiver's screen
+                // 5. Zero-Touch UI Display: Auto-pop up the exact picture on the receiver's screen
                 new Handler(Looper.getMainLooper()).post(() -> {
                     VisualRenderer.showLosslessImageDialog(context, exactImageBytes, finalName);
                 });
@@ -189,12 +197,26 @@ public class PhoneticImageTransceiver {
         }
 
         String payloadStr = new String(rawPayload, StandardCharsets.UTF_8);
-        if (!payloadStr.startsWith(PHONETIC_IMG_PREAMBLE)) {
+        int preambleIndex = payloadStr.indexOf(PHONETIC_IMG_PREAMBLE);
+        if (preambleIndex == -1) {
             return new ArrayList<>();
         }
 
-        String data = payloadStr.substring(PHONETIC_IMG_PREAMBLE.length());
+        String data = payloadStr.substring(preambleIndex + PHONETIC_IMG_PREAMBLE.length());
+        
+        // Strip trailing metadata or noise delimiters if attached
+        if (data.contains("#")) {
+            data = data.substring(0, data.indexOf('#'));
+        }
+
         String[] splitTokens = data.split("\\|");
-        return new ArrayList<>(Arrays.asList(splitTokens));
+        List<String> list = new ArrayList<>();
+        for (String token : splitTokens) {
+            String trimmed = token.trim();
+            if (!trimmed.isEmpty()) {
+                list.add(trimmed);
+            }
+        }
+        return list;
     }
 }
