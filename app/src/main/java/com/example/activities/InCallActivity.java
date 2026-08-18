@@ -80,6 +80,7 @@ public class InCallActivity extends AppCompatActivity {
 
     private String phoneNumber = "";
     private String contactName = "";
+    private boolean isIncomingCall = false; // Flag to identify if we are the sender or receiver
 
     private AudioManager audioManager;
     private ToneGenerator toneGenerator;
@@ -165,7 +166,9 @@ public class InCallActivity extends AppCompatActivity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true);
             setTurnScreenOn(true);
-            KeyguardManager keyguardManager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+            KeyguardManager keyguardManager = (Context.getSystemService(Context.KEYGUARD_SERVICE) != null) 
+                    ? (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE) 
+                    : null;
             if (keyguardManager != null) {
                 keyguardManager.requestDismissKeyguard(this, null);
             }
@@ -179,6 +182,9 @@ public class InCallActivity extends AppCompatActivity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         setContentView(R.layout.activity_in_call);
+
+        // Retrieve call direction flag from AirSignalInCallService
+        isIncomingCall = getIntent().getBooleanExtra("is_incoming", false);
 
         dbHelper = DatabaseHelper.getInstance(this);
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
@@ -259,6 +265,7 @@ public class InCallActivity extends AppCompatActivity {
             tvCallerPhone.setText(phoneNumber);
             lookupContactName();
         }
+        isIncomingCall = intent.getBooleanExtra("is_incoming", false);
         android.telecom.Call activeCall = AirSignalInCallService.getActiveCall();
         if (activeCall != null) {
             updateTelecomCallState(activeCall.getState());
@@ -288,17 +295,22 @@ public class InCallActivity extends AppCompatActivity {
                     startCallTimer();
                     AirLogger.i(TAG, "Call state ACTIVE - started call duration timer");
 
-                    // Set up handshake awaiting status with manual tap override
+                    // Only show transmission action on the Sender Phone.
+                    // Receiver Phone (isIncomingCall == true) stays GONE until it hears actual data.
                     if (tvRecordingBadge != null && !isRecording) {
-                        tvRecordingBadge.setVisibility(View.VISIBLE);
-                        tvRecordingBadge.setText("⚡ AWAITING RECEIVER HANDSHAKE...");
-                        tvRecordingBadge.setOnClickListener(v -> {
-                            Intent triggerIntent = new Intent(InCallActivity.this, AudioTransferService.class);
-                            triggerIntent.setAction(AudioTransferService.ACTION_EXECUTE_STAGED_TRANSMISSION);
-                            startService(triggerIntent);
-                            tvRecordingBadge.setText("⚡ TRANSMITTING ACTIVATION...");
-                            Toast.makeText(InCallActivity.this, "Initiating Acoustic Data Stream...", Toast.LENGTH_SHORT).show();
-                        });
+                        if (!isIncomingCall) {
+                            tvRecordingBadge.setVisibility(View.VISIBLE);
+                            tvRecordingBadge.setText("⚡ TAP TO TRANSMIT DATA NOW");
+                            tvRecordingBadge.setOnClickListener(v -> {
+                                Intent triggerIntent = new Intent(InCallActivity.this, AudioTransferService.class);
+                                triggerIntent.setAction(AudioTransferService.ACTION_EXECUTE_STAGED_TRANSMISSION);
+                                startService(triggerIntent);
+                                tvRecordingBadge.setText("⚡ TRANSMITTING ACTIVATION...");
+                                Toast.makeText(InCallActivity.this, "Initiating Acoustic Data Stream...", Toast.LENGTH_SHORT).show();
+                            });
+                        } else {
+                            tvRecordingBadge.setVisibility(View.GONE);
+                        }
                     }
                 }
                 break;
