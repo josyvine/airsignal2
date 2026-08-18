@@ -106,6 +106,9 @@ public class AirSignalInCallService extends InCallService {
         String number = extractNumber(call);
         AirLogger.i(TAG, "onCallAdded: state=" + stateToString(call.getState()) + ", number=" + number);
 
+        // Detect if the call is an incoming call (ringing)
+        final boolean isIncoming = (call.getState() == Call.STATE_RINGING);
+
         call.registerCallback(new Call.Callback() {
             @Override
             public void onStateChanged(Call c, int state) {
@@ -157,6 +160,7 @@ public class AirSignalInCallService extends InCallService {
         try {
             Intent intent = new Intent(this, InCallActivity.class);
             intent.putExtra("phone_number", number);
+            intent.putExtra("is_incoming", isIncoming); // Pass the checked call direction to UI
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_CLEAR_TOP);
 
             PendingIntent pendingIntent = PendingIntent.getActivity(
