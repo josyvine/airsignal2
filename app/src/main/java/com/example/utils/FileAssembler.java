@@ -2,6 +2,7 @@ package com.example.utils;
 
 import android.content.Context;
 import android.content.Intent;
+import android.media.MediaScannerConnection;
 import android.os.Environment;
 import android.util.Base64;
 
@@ -17,6 +18,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.zip.GZIPInputStream;
 
 public class FileAssembler {
@@ -85,7 +87,7 @@ public class FileAssembler {
                     0,
                     0,
                     "RECEIVING",
-                    "RAW_BINARY_2400",
+                    "RAW_BINARY_1200",
                     packet.getTotalPackets(),
                     0
             );
@@ -111,6 +113,14 @@ public class FileAssembler {
             if (assembledFile != null && assembledFile.exists()) {
                 db.updateTransferStatus(packet.getFileId(), "COMPLETED");
                 AirLogger.i(TAG, "File successfully assembled: " + assembledFile.getAbsolutePath());
+
+                // Index with Android MediaScanner so file appears instantly in downloads/gallery
+                MediaScannerConnection.scanFile(
+                        context.getApplicationContext(),
+                        new String[]{assembledFile.getAbsolutePath()},
+                        new String[]{getMimeType(assembledFile)},
+                        (path, uri) -> AirLogger.i(TAG, "MediaScanner indexed assembled file: " + path)
+                );
 
                 Intent completeBroadcast = new Intent(ACTION_TRANSFER_PROGRESS);
                 completeBroadcast.putExtra(EXTRA_FILE_ID, packet.getFileId());
@@ -211,5 +221,25 @@ public class FileAssembler {
             return false;
         }
         return packets.size() == expectedTotal;
+    }
+
+    private static String getMimeType(File file) {
+        String name = file.getName().toLowerCase(Locale.getDefault());
+        if (name.endsWith(".webp")) {
+            return "image/webp";
+        } else if (name.endsWith(".png")) {
+            return "image/png";
+        } else if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
+            return "image/jpeg";
+        } else if (name.endsWith(".txt") || name.endsWith(".log")) {
+            return "text/plain";
+        } else if (name.endsWith(".3gp")) {
+            return "video/3gpp";
+        } else if (name.endsWith(".amr")) {
+            return "audio/amr";
+        } else if (name.endsWith(".mp3")) {
+            return "audio/mpeg";
+        }
+        return "*/*";
     }
 }
